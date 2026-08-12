@@ -426,15 +426,29 @@ fn is_rule_set_enabled(rs: &Value) -> bool {
     rs.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
-/// Recursively strip `null` values and empty arrays/objects from a JSON
-/// rule. Empty matchers would fail `sing-box check` (every rule needs
-/// at least one matcher).
+/// UI-only fields on a rule that the React side adds for editing but
+/// sing-box doesn't know about. They MUST be stripped before
+/// `sing-box check` or sing-box will reject the config with
+/// "unknown field" errors.
+///
+/// - `enabled`:  per-rule on/off switch (sing-box has no equivalent;
+///               disabled rules are dropped entirely, not marked)
+/// - `id`:       React key + drag-and-drop identifier; meaningless to
+///               the proxy
+/// - `label`:    human-readable description shown in the UI; not
+///               part of the sing-box rule schema
+const UI_ONLY_FIELDS: &[&str] = &["enabled", "id", "label"];
+
+/// Recursively strip `null` values, empty arrays/objects, and UI-only
+/// fields from a JSON rule. Empty matchers would fail `sing-box check`
+/// (every rule needs at least one matcher), and unknown fields make
+/// sing-box fail with "json: unknown field" errors.
 fn strip_empty_fields(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
             for (k, val) in map {
-                if k == "enabled" {
+                if UI_ONLY_FIELDS.contains(&k.as_str()) {
                     // UI-only, never emitted to sing-box.
                     continue;
                 }
@@ -1150,6 +1164,43 @@ mod tests {
             "action must be a string for sing-box, got: {}",
             user_rule["action"]
         );
+        assert_eq!(user_rule["action"], "route");
+        assert_eq!(user_rule["outbound"], "direct");
+    }
+
+    #[test]
+    fn ui_only_fields_are_stripped_before_emit() {
+        // The UI stamps every rule with id (React key), label
+        // (display name), and enabled (on/off toggle). All three are
+        // meaningless to sing-box and would cause "unknown field"
+        // errors. The user's second bug report was specifically:
+        //   route.rules[2].id: json: unknown field "id"
+        // This test guards against any future reintroduction.
+        let s = routing(
+            GeneratorSettings::default(),
+            RoutingOptions {
+                rules: vec![json!({
+                    "id": "rule-123",
+                    "label": "Bypass LAN",
+                    "enabled": true,
+                    "ip_cidr": ["10.0.0.0/8"],
+                    "action": "route",
+                    "outbound": "direct",
+                })],
+                ..RoutingOptions::default()
+            },
+        );
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let user_rule = &cfg["route"]["rules"][2];
+        // UI-only fields must be absent
+        assert!(user_rule.get("id").is_none(), "id must be stripped");
+        assert!(user_rule.get("label").is_none(), "label must be stripped");
+        assert!(
+            user_rule.get("enabled").is_none(),
+            "enabled must be stripped"
+        );
+        // Real fields must survive
+        assert_eq!(user_rule["ip_cidr"][0], "10.0.0.0/8");
         assert_eq!(user_rule["action"], "route");
         assert_eq!(user_rule["outbound"], "direct");
     }

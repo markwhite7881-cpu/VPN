@@ -31,34 +31,61 @@ fn main() {
         return;
     }
 
-    // --- 1. Build a config with the UI's OBJECT form of action -----
+    // --- 1. Build a config with the UI's full real-world shape -----
+    // Each rule carries:
+    //   - `id` (React key) — must be stripped before sing-box
+    //   - `label` (display name) — must be stripped before sing-box
+    //   - `enabled` (on/off toggle) — must be stripped before sing-box
+    //   - `action` as an OBJECT (UI form) — must be normalized to
+    //     sing-box's string form
+    // Both bugs (action object + UI-only fields) are exercised here.
     let settings = GeneratorSettings {
         tunnel_mode: TunnelMode::SystemProxy,
         routing: RoutingOptions {
             rules: vec![
-                // Each rule uses the UI's object form: action is
-                // {kind, outbound} instead of sing-box's {action,
-                // outbound} siblings. Before the fix this would
-                // fail sing-box check.
                 json!({
+                    "id": "rule-001",
+                    "label": "Bypass LAN",
+                    "enabled": true,
                     "ip_cidr": ["10.0.0.0/8", "192.168.0.0/16"],
                     "action": {"kind": "route", "outbound": "direct"},
                 }),
                 json!({
+                    "id": "rule-002",
+                    "label": "Route example.com via proxy",
+                    "enabled": true,
                     "domain_suffix": ["example.com"],
                     "action": {"kind": "route", "outbound": "proxy"},
                 }),
                 json!({
+                    "id": "rule-003",
+                    "label": "Telegram through proxy",
+                    "enabled": true,
                     "process_name": ["Telegram.exe"],
                     "action": {"kind": "route", "outbound": "proxy"},
                 }),
                 json!({
+                    "id": "rule-004",
+                    "label": "Block IPv6",
+                    "enabled": true,
                     "ip_version": 6,
                     "action": {"kind": "reject"},
                 }),
                 json!({
+                    "id": "rule-005",
+                    "label": "Hijack DNS",
+                    "enabled": true,
                     "network": "udp",
                     "action": {"kind": "hijack-dns"},
+                }),
+                // A disabled rule — should be DROPPED entirely (not
+                // passed through to sing-box with `enabled: false`).
+                json!({
+                    "id": "rule-006",
+                    "label": "disabled rule",
+                    "enabled": false,
+                    "ip_cidr": ["8.8.8.8/32"],
+                    "action": {"kind": "route", "outbound": "direct"},
                 }),
             ],
             rule_sets: vec![],
@@ -71,13 +98,23 @@ fn main() {
     };
     let cfg = Config::build(&[], &settings);
 
-    // --- 2. Assert: all user rules have action as a STRING ----------
+    // --- 2. Assert: all user rules have action as a STRING, and no
+    //         UI-only fields leak through, and the disabled rule
+    //         is dropped entirely.
     let rules = cfg["route"]["rules"].as_array().expect("route.rules");
     println!("Generated {} route rules:", rules.len());
     for (i, r) in rules.iter().enumerate() {
         println!("  [{}] {}", i, r);
     }
-    let user_rules = &rules[2..]; // first two are system: dns-bypass + sniff
+    // System rules come first: dns-bypass + sniff. The user rules
+    // follow, except the disabled one which is dropped.
+    // So: 2 system + 5 user (not 6, because rule-006 is disabled) = 7.
+    assert_eq!(
+        rules.len(),
+        7,
+        "expected 2 system + 5 user (the disabled rule must be dropped)"
+    );
+    let user_rules = &rules[2..];
     for (i, r) in user_rules.iter().enumerate() {
         let action = &r["action"];
         assert!(
@@ -86,8 +123,39 @@ fn main() {
             i,
             action
         );
+        // UI-only fields must NOT leak through
+        assert!(
+            r.get("id").is_none(),
+            "user rule {}: id must be stripped (UI-only), got: {}",
+            i,
+            r.get("id").unwrap()
+        );
+        assert!(
+            r.get("label").is_none(),
+            "user rule {}: label must be stripped (UI-only)",
+            i
+        );
+        assert!(
+            r.get("enabled").is_none(),
+            "user rule {}: enabled must be stripped (UI-only)",
+            i
+        );
     }
-    println!("\n  ✓ all user rules have action as a STRING");
+    // The disabled rule (id rule-006) must not appear anywhere in the
+    // emitted config.
+    for r in rules {
+        let s = r.to_string();
+        assert!(
+            !s.contains("8.8.8.8"),
+            "disabled rule with 8.8.8.8/32 must be dropped, found: {s}"
+        );
+        assert!(
+            !s.contains("rule-006"),
+            "disabled rule id must be dropped, found in: {s}"
+        );
+    }
+    println!("\n  ✓ all user rules: action is STRING, no UI-only fields leak");
+    println!("  ✓ disabled rule dropped entirely");
 
     // --- 3. Run `sing-box check` ---------------------------------
     let out_path = here
