@@ -80,10 +80,10 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
   };
 
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-900/60 p-4 space-y-4">
+    <div className="rounded-md border border-border bg-card/30 p-4 space-y-4">
       {/* Label */}
       <div>
-        <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+        <label className="block text-xs uppercase tracking-wide text-muted-foreground mb-1">
           Label
         </label>
         <input
@@ -91,13 +91,13 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
           value={rule.label ?? ""}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="e.g. Work split-tunnel"
-          className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500"
+          className="w-full rounded-md bg-background border border-input px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
         />
       </div>
 
       {/* Action */}
       <div>
-        <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">
+        <label className="block text-xs uppercase tracking-wide text-muted-foreground mb-1">
           Action
         </label>
         <div className="flex flex-wrap items-center gap-2">
@@ -113,10 +113,10 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
                 else if (kind === "resolve") setAction({ kind });
               }}
               className={cn(
-                "rounded px-2.5 py-1 text-xs font-medium border transition",
+                "rounded-md px-2.5 py-1 text-xs font-medium border transition",
                 a.kind === kind
-                  ? "bg-sky-500 text-white border-sky-500"
-                  : "bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700",
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background text-foreground/80 border-border hover:border-foreground/40",
               )}
             >
               {kind}
@@ -128,7 +128,7 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
             <select
               value={a.outbound}
               onChange={(e) => setAction({ kind: "route", outbound: e.target.value })}
-              className="w-full rounded bg-slate-950 border border-slate-800 px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-md bg-background border border-input px-3 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="proxy">proxy (selector)</option>
               <option value="auto">auto (urltest)</option>
@@ -216,20 +216,20 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
             onChange={(e) =>
               onChange({ ...rule, invert: e.target.checked || undefined })
             }
-            className="rounded border-slate-700 bg-slate-950"
+            className="rounded border-input bg-background"
           />
-          <label htmlFor={`invert-${rule.id}`} className="text-sm text-slate-300 select-none">
+          <label htmlFor={`invert-${rule.id}`} className="text-sm text-foreground/80 select-none">
             Invert (match everything <em>except</em> these conditions)
           </label>
         </div>
       </div>
 
       {/* Advanced — collapsed by default */}
-      <div className="border-t border-slate-800 pt-3">
+      <div className="border-t border-border pt-3">
         <button
           type="button"
           onClick={() => setShowAdvanced(!showAdvanced)}
-          className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200"
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
         >
           {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           Advanced matchers
@@ -290,9 +290,9 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
                       : omitKey(m, "ip_is_private"),
                   })
                 }
-                className="rounded border-slate-700 bg-slate-950"
+                className="rounded border-input bg-background"
               />
-              <label htmlFor={`private-${rule.id}`} className="text-sm text-slate-300 select-none">
+              <label htmlFor={`private-${rule.id}`} className="text-sm text-foreground/80 select-none">
                 Match non-public (private) IPs
               </label>
             </div>
@@ -331,18 +331,18 @@ function ChipField({ label, values, placeholder, onChange }: ChipFieldProps) {
 
   return (
     <div>
-      <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">{label}</label>
+      <label className="block text-xs uppercase tracking-wide text-muted-foreground mb-1">{label}</label>
       <div className="flex flex-wrap gap-1.5 items-center">
         {arr.map((v) => (
           <span
             key={v}
-            className="inline-flex items-center gap-1 rounded-full bg-sky-500/15 text-sky-200 px-2 py-0.5 text-xs"
+            className="inline-flex items-center gap-1 rounded-full bg-foreground/10 text-foreground border border-foreground/15 px-2 py-0.5 text-xs"
           >
             {v}
             <button
               type="button"
               onClick={() => remove(v)}
-              className="text-sky-300/70 hover:text-sky-100"
+              className="text-muted-foreground hover:text-foreground"
               aria-label={`Remove ${v}`}
             >
               ×
@@ -363,7 +363,7 @@ function ChipField({ label, values, placeholder, onChange }: ChipFieldProps) {
               }
             }}
             placeholder={placeholder}
-            className="rounded bg-slate-950 border border-slate-800 px-2 py-0.5 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500 w-32"
+            className="rounded-md bg-background border border-input px-2 py-0.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-32"
           />
           <Button variant="ghost" size="sm" onClick={add} title="Add">
             <Plus size={12} />
@@ -394,18 +394,18 @@ function PortField({ label, values, onChange }: PortFieldProps) {
   const remove = (n: number) => onChange(arr.filter((x) => x !== n));
   return (
     <div>
-      <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">{label}</label>
+      <label className="block text-xs uppercase tracking-wide text-muted-foreground mb-1">{label}</label>
       <div className="flex flex-wrap gap-1.5 items-center">
         {arr.map((n) => (
           <span
             key={n}
-            className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 text-emerald-200 px-2 py-0.5 text-xs"
+            className="inline-flex items-center gap-1 rounded-full bg-foreground/10 text-foreground border border-foreground/15 px-2 py-0.5 text-xs font-mono"
           >
             {n}
             <button
               type="button"
               onClick={() => remove(n)}
-              className="text-emerald-300/70 hover:text-emerald-100"
+              className="text-muted-foreground hover:text-foreground"
               aria-label={`Remove port ${n}`}
             >
               ×
@@ -423,7 +423,7 @@ function PortField({ label, values, onChange }: PortFieldProps) {
               if (e.key === "Enter") { e.preventDefault(); add(); }
             }}
             placeholder="443"
-            className="rounded bg-slate-950 border border-slate-800 px-2 py-0.5 text-xs text-slate-100 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500 w-20"
+            className="rounded-md bg-background border border-input px-2 py-0.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring w-20 font-mono"
           />
           <Button variant="ghost" size="sm" onClick={add} title="Add">
             <Plus size={12} />
@@ -444,7 +444,7 @@ interface ChipsPickerProps {
 function ChipsPicker({ label, options, values, onToggle }: ChipsPickerProps) {
   return (
     <div>
-      <label className="block text-xs uppercase tracking-wide text-slate-400 mb-1">{label}</label>
+      <label className="block text-xs uppercase tracking-wide text-muted-foreground mb-1">{label}</label>
       <div className="flex flex-wrap gap-1.5">
         {options.map((opt) => {
           const active = values.includes(opt);
@@ -456,8 +456,8 @@ function ChipsPicker({ label, options, values, onToggle }: ChipsPickerProps) {
               className={cn(
                 "rounded-full px-2.5 py-0.5 text-xs border transition",
                 active
-                  ? "bg-violet-500 text-white border-violet-500"
-                  : "bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700",
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background text-foreground/80 border-border hover:border-foreground/40",
               )}
             >
               {opt}

@@ -18,6 +18,7 @@ import {
   type RuleSetPreset,
 } from "@/lib/presets";
 import type { CustomRule, CustomRuleSet } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface Props {
   onAddRule: (rule: CustomRule) => void;
@@ -31,10 +32,10 @@ export function PresetPicker({ onAddRule, onAddRuleSet }: Props) {
   );
 
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-900/30 p-4 space-y-4">
+    <div className="rounded-md border border-border bg-card/30 p-4 space-y-4">
       <div>
-        <h3 className="text-sm font-medium text-slate-200">Starter rules</h3>
-        <p className="text-xs text-slate-500 mt-0.5">
+        <h3 className="text-sm font-medium text-foreground">Starter rules</h3>
+        <p className="text-xs text-muted-foreground mt-0.5">
           One-click inserts for common routing rules.
         </p>
         <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -43,13 +44,13 @@ export function PresetPicker({ onAddRule, onAddRuleSet }: Props) {
               key={p.id}
               type="button"
               onClick={() => onAddRule({ id: newRuleId(), ...p.build() })}
-              className="text-left rounded-md border border-slate-800 bg-slate-950/60 hover:border-sky-500/50 hover:bg-slate-900 transition px-3 py-2 group"
+              className="text-left rounded-md border border-border bg-background/60 hover:border-foreground/40 hover:bg-accent transition px-3 py-2 group"
             >
               <div className="flex items-center gap-2">
-                <Plus size={14} className="text-slate-500 group-hover:text-sky-400" />
-                <span className="text-sm text-slate-100">{p.label}</span>
+                <Plus size={14} className="text-muted-foreground group-hover:text-foreground" />
+                <span className="text-sm text-foreground">{p.label}</span>
               </div>
-              <div className="text-xs text-slate-500 mt-0.5 ml-5 line-clamp-2">
+              <div className="text-xs text-muted-foreground mt-0.5 ml-5 line-clamp-2">
                 {p.description}
               </div>
             </button>
@@ -57,27 +58,27 @@ export function PresetPicker({ onAddRule, onAddRuleSet }: Props) {
         </div>
       </div>
 
-      <div className="border-t border-slate-800 pt-4">
+      <div className="border-t border-border pt-4">
         <div className="flex items-center justify-between gap-2 mb-2">
           <div>
-            <h3 className="text-sm font-medium text-slate-200">Rule-set library</h3>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <h3 className="text-sm font-medium text-foreground">Rule-set library</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
               Pre-built rule-sets (Loyalsoldier / meta-rules-dat). Use the
               rule-set tag in any rule's <em>Rule-set</em> field.
             </p>
           </div>
-          <div className="flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950 p-0.5 text-xs">
+          <div className="flex items-center gap-1 rounded-md border border-border bg-background p-0.5 text-xs">
             {(["all", "loyalsoldier", "meta"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setSource(s)}
-                className={
-                  "px-2 py-1 rounded transition " +
-                  (source === s
-                    ? "bg-sky-500 text-white"
-                    : "text-slate-400 hover:text-slate-200")
-                }
+                className={cn(
+                  "px-2 py-1 rounded transition",
+                  source === s
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
               >
                 {s}
               </button>
@@ -106,10 +107,10 @@ function RuleSetPresetRow({
   onAdd: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded border border-slate-800 bg-slate-950/40 px-2.5 py-1.5">
-      <code className="text-xs text-sky-300 font-mono">{preset.tag}</code>
-      <span className="text-sm text-slate-200 truncate flex-1">{preset.label}</span>
-      <Badge variant="default">{preset.source}</Badge>
+    <div className="flex items-center gap-2 rounded border border-border bg-background/40 px-2.5 py-1.5">
+      <code className="text-xs text-foreground/80 font-mono">{preset.tag}</code>
+      <span className="text-sm text-foreground truncate flex-1">{preset.label}</span>
+      <Badge variant="secondary">{preset.source}</Badge>
       <Button variant="ghost" size="sm" onClick={onAdd} title="Add rule-set">
         <Plus size={12} />
       </Button>

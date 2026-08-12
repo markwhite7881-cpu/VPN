@@ -79,9 +79,9 @@ export function RuleRow({
       ref={setNodeRef}
       style={style}
       className={cn(
-        "rounded-md border bg-slate-900/40 transition",
-        rule.enabled ? "border-slate-800" : "border-slate-800/50 opacity-60",
-        isDragging && "shadow-lg shadow-sky-500/20 border-sky-500/40",
+        "rounded-md border bg-card/40 transition",
+        rule.enabled ? "border-border" : "border-border/50 opacity-60",
+        isDragging && "shadow-lg ring-1 ring-foreground/20",
       )}
     >
       {/* Collapsed bar */}
@@ -90,7 +90,7 @@ export function RuleRow({
           type="button"
           {...attributes}
           {...listeners}
-          className="text-slate-500 hover:text-slate-300 cursor-grab active:cursor-grabbing"
+          className="text-muted-foreground hover:text-foreground/80 cursor-grab active:cursor-grabbing"
           aria-label="Drag to reorder"
         >
           <GripVertical size={16} />
@@ -103,8 +103,8 @@ export function RuleRow({
           className={cn(
             "p-1 rounded transition",
             rule.enabled
-              ? "text-emerald-400 hover:text-emerald-300"
-              : "text-slate-600 hover:text-slate-400",
+              ? "text-foreground hover:text-foreground/80"
+              : "text-muted-foreground/60 hover:text-muted-foreground",
           )}
         >
           <Power size={14} />
@@ -112,7 +112,7 @@ export function RuleRow({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-slate-100 truncate">
+            <span className="text-sm text-foreground truncate">
               {rule.label || "(unnamed rule)"}
             </span>
             <Badge
@@ -128,7 +128,7 @@ export function RuleRow({
             </Badge>
           </div>
           {matcherSummary.length > 0 && (
-            <div className="text-xs text-slate-500 mt-0.5 truncate">
+            <div className="text-xs text-muted-foreground mt-0.5 truncate">
               {matcherSummary.join(" · ")}
             </div>
           )}

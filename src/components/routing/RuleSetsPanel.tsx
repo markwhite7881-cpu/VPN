@@ -7,6 +7,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import type { CustomRuleSet } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 interface Props {
   ruleSets: CustomRuleSet[];
@@ -45,11 +46,11 @@ export function RuleSetsPanel({ ruleSets, onChange }: Props) {
   };
 
   return (
-    <div className="rounded-md border border-slate-800 bg-slate-900/30 p-4 space-y-3">
+    <div className="rounded-md border border-border bg-card/30 p-4 space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-slate-200">Rule-sets</h3>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <h3 className="text-sm font-medium text-foreground">Rule-sets</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
             External rule-sets referenced by rules (Loyalsoldier, meta-rules-dat, custom).
           </p>
         </div>
@@ -60,7 +61,7 @@ export function RuleSetsPanel({ ruleSets, onChange }: Props) {
       </div>
 
       {ruleSets.length === 0 && (
-        <div className="rounded border border-dashed border-slate-800 bg-slate-950/40 p-3 text-center text-xs text-slate-500">
+        <div className="rounded border border-dashed border-border bg-background/40 p-3 text-center text-xs text-muted-foreground">
           No rule-sets. Use the picker above to add Loyalsoldier or meta-rules-dat presets.
         </div>
       )}
@@ -69,10 +70,10 @@ export function RuleSetsPanel({ ruleSets, onChange }: Props) {
         {ruleSets.map((rs) => (
           <div
             key={rs.tag}
-            className={
-              "rounded border border-slate-800 bg-slate-950/40 px-3 py-2 " +
-              (rs.enabled ? "" : "opacity-60")
-            }
+            className={cn(
+              "rounded border border-border bg-background/40 px-3 py-2",
+              !rs.enabled && "opacity-60",
+            )}
           >
             <div className="flex items-center gap-2 flex-wrap">
               <input
@@ -80,11 +81,12 @@ export function RuleSetsPanel({ ruleSets, onChange }: Props) {
                 checked={rs.enabled}
                 onChange={(e) => update(rs.tag, { enabled: e.target.checked })}
                 title="Enable / disable"
+                className="rounded border-input bg-background"
               />
-              <code className="text-xs text-sky-300 font-mono">{rs.tag}</code>
-              <Badge variant="default">{rs.type}</Badge>
-              {rs.format && <Badge variant="default">{rs.format}</Badge>}
-              {rs.update_interval && <Badge variant="default">↻ {rs.update_interval}</Badge>}
+              <code className="text-xs text-foreground/80 font-mono">{rs.tag}</code>
+              <Badge variant="secondary">{rs.type}</Badge>
+              {rs.format && <Badge variant="outline">{rs.format}</Badge>}
+              {rs.update_interval && <Badge variant="outline">↻ {rs.update_interval}</Badge>}
               <Button
                 variant="ghost"
                 size="sm"
@@ -102,7 +104,7 @@ export function RuleSetsPanel({ ruleSets, onChange }: Props) {
                   value={rs.url ?? ""}
                   onChange={(e) => update(rs.tag, { url: e.target.value })}
                   placeholder="https://…/geoip-cn.srs"
-                  className="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
+                  className="w-full rounded-md bg-background border border-input px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring font-mono"
                 />
               </div>
             )}
@@ -113,7 +115,7 @@ export function RuleSetsPanel({ ruleSets, onChange }: Props) {
                   value={rs.path ?? ""}
                   onChange={(e) => update(rs.tag, { path: e.target.value })}
                   placeholder="C:\rules\my.srs"
-                  className="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-sky-500 font-mono"
+                  className="w-full rounded-md bg-background border border-input px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring font-mono"
                 />
               </div>
             )}

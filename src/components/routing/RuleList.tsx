@@ -73,8 +73,8 @@ export function RuleList({ rules, outbounds, onChange, onAdd }: Props) {
         >
           <div className="space-y-1.5">
             {rules.length === 0 && (
-              <div className="rounded-md border border-dashed border-slate-800 bg-slate-900/20 p-6 text-center text-sm text-slate-500">
-                No rules yet. Click <strong className="text-slate-300">+ Add rule</strong> below
+              <div className="rounded-md border border-dashed border-border bg-card/20 p-6 text-center text-sm text-muted-foreground">
+                No rules yet. Click <strong className="text-foreground/80">+ Add rule</strong> below
                 or pick a preset from the panel.
               </div>
             )}

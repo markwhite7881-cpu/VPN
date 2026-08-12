@@ -91,8 +91,8 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">Routing</h2>
-          <p className="text-sm text-slate-400 mt-0.5">
+          <h2 className="text-lg font-semibold text-foreground">Routing</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
             Order rules from most specific to most generic. First match wins.
             Drag to reorder, click to expand.
           </p>
@@ -109,32 +109,32 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
       </div>
 
       {/* General settings — sniff, final, auto_detect_interface */}
-      <div className="rounded-md border border-slate-800 bg-slate-900/30 p-4">
+      <div className="rounded-md border border-border bg-card/30 p-4">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <label className="flex items-center gap-2 text-sm text-slate-200">
+          <label className="flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
               checked={r.sniff}
               onChange={(e) => updateRouting({ sniff: e.target.checked })}
-              className="rounded border-slate-700 bg-slate-950"
+              className="rounded border-input bg-background"
             />
             Sniff protocol (HTTP/TLS/QUIC)
           </label>
-          <label className="flex items-center gap-2 text-sm text-slate-200">
+          <label className="flex items-center gap-2 text-sm text-foreground">
             <input
               type="checkbox"
               checked={r.auto_detect_interface}
               onChange={(e) => updateRouting({ auto_detect_interface: e.target.checked })}
-              className="rounded border-slate-700 bg-slate-950"
+              className="rounded border-input bg-background"
             />
             Auto-detect interface
           </label>
           <div>
-            <label className="block text-xs text-slate-400 mb-1">Final outbound</label>
+            <label className="block text-xs text-muted-foreground mb-1">Final outbound</label>
             <select
               value={r.final_outbound}
               onChange={(e) => updateRouting({ final_outbound: e.target.value })}
-              className="w-full rounded bg-slate-950 border border-slate-800 px-2 py-1 text-sm text-slate-100 focus:outline-none focus:ring-1 focus:ring-sky-500"
+              className="w-full rounded-md bg-background border border-input px-2 py-1 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             >
               <option value="proxy">proxy (selector)</option>
               <option value="auto">auto (urltest)</option>
@@ -154,10 +154,10 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
 
       {/* Warning: rules reference missing rule-sets */}
       {missingRuleSetTags.length > 0 && (
-        <div className="rounded-md border border-amber-700/40 bg-amber-900/15 px-3 py-2 text-sm text-amber-200">
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground">
           ⚠ Rules reference rule-set{missingRuleSetTags.length > 1 ? "s" : ""} that aren&apos;t enabled:{" "}
           {missingRuleSetTags.map((t) => (
-            <code key={t} className="mx-0.5 font-mono bg-amber-950/40 rounded px-1">
+            <code key={t} className="mx-0.5 font-mono bg-destructive/20 text-destructive-foreground rounded px-1">
               {t}
             </code>
           ))}
@@ -167,7 +167,7 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
 
       {/* Main: rule list */}
       <div>
-        <h3 className="text-sm font-medium text-slate-200 mb-2">Custom rules ({r.rules.length})</h3>
+        <h3 className="text-sm font-medium text-foreground mb-2">Custom rules ({r.rules.length})</h3>
         <RuleList
           rules={r.rules}
           outbounds={profiles.filter(
@@ -190,9 +190,9 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
 
       {/* JSON preview */}
       {jsonOpen && (
-        <div className="rounded-md border border-slate-800 bg-slate-950 p-3">
+        <div className="rounded-md border border-border bg-card/30 p-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs uppercase tracking-wide text-slate-400">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
               Generated sing-box route block (informational)
             </span>
             <Button variant="ghost" size="sm" onClick={onCopyJson} title="Copy JSON">
@@ -200,7 +200,7 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
               {jsonCopied ? "Copied" : "Copy"}
             </Button>
           </div>
-          <pre className="text-xs text-slate-300 overflow-x-auto whitespace-pre-wrap">
+          <pre className="text-xs text-foreground/80 overflow-x-auto whitespace-pre-wrap font-mono">
             {JSON.stringify(jsonPreview, null, 2)}
           </pre>
         </div>
