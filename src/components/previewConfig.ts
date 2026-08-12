@@ -134,8 +134,8 @@ export function previewToSingboxJson(
   }
 
   // ---- dns (sing-box 1.12+ typed format) ----
-  const localInput = settings.local_dns ?? "223.5.5.5";
-  const remoteInput = settings.remote_dns ?? "https://dns.google/dns-query";
+  const localInput = settings.local_dns ?? "1.1.1.1";
+  const remoteInput = settings.remote_dns ?? "https://8.8.8.8/dns-query";
   const [localType, localServer] = classifyDns(localInput);
   const [remoteType, remoteServer] = classifyDns(remoteInput);
   const local: Record<string, unknown> = {

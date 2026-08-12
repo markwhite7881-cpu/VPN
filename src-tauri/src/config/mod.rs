@@ -142,8 +142,15 @@ impl Default for GeneratorSettings {
             clash_api: ClashApiOptions::default(),
             tun_interface_name: None,
             mixed_port: Some(2080),
-            local_dns: Some("223.5.5.5".to_string()),
-            remote_dns: Some("https://dns.google/dns-query".to_string()),
+            // Cloudflare 1.1.1.1 — globally reachable. Aliyun 223.5.5.5
+            // only works from China and times out elsewhere, which
+            // breaks the rule-set fetcher (and the whole internet) when
+            // set from outside China.
+            local_dns: Some("1.1.1.1".to_string()),
+            // IP-form DoH endpoint. `dns.google` (hostname) needs DNS
+            // to resolve, which is circular and breaks if the local
+            // resolver can't reach it. Using the IP removes the lookup.
+            remote_dns: Some("https://8.8.8.8/dns-query".to_string()),
             // `None` here means "let `auto` (urltest) decide". The
             // frontend switches to a real tag the moment the user
             // picks a server in the picker.
@@ -819,16 +826,19 @@ mod tests {
         let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
         let servers = cfg["dns"]["servers"].as_array().unwrap();
         assert_eq!(servers.len(), 2);
-        // Local default is 223.5.5.5 — type=udp, no detour.
+        // Local default is 1.1.1.1 (Cloudflare) — globally reachable,
+        // type=udp, no detour.
         let local = &servers[0];
         assert_eq!(local["tag"], "local");
         assert_eq!(local["type"], "udp");
-        assert_eq!(local["server"], "223.5.5.5");
-        // Remote default is https://dns.google/dns-query — type=https, host stripped.
+        assert_eq!(local["server"], "1.1.1.1");
+        // Remote default is https://8.8.8.8/dns-query — type=https.
+        // IP-form (not dns.google) avoids the circular DNS-for-DNS lookup
+        // when the local resolver can't reach the hostname.
         let remote = &servers[1];
         assert_eq!(remote["tag"], "remote");
         assert_eq!(remote["type"], "https");
-        assert_eq!(remote["server"], "dns.google");
+        assert_eq!(remote["server"], "8.8.8.8");
         // DoH should reference local domain_resolver.
         assert_eq!(remote["domain_resolver"], "local");
     }

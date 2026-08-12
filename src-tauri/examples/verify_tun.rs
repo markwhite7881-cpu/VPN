@@ -38,8 +38,8 @@ fn main() {
             clash_api: singbox_client_lib::config::ClashApiOptions::default(),
             tun_interface_name: None,
             mixed_port: Some(2080),
-            local_dns: Some("223.5.5.5".to_string()),
-            remote_dns: Some("https://dns.google/dns-query".to_string()),
+            local_dns: Some("1.1.1.1".to_string()),
+            remote_dns: Some("https://8.8.8.8/dns-query".to_string()),
             default_outbound: None,
         },
     );

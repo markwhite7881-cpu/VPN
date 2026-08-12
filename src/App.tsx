@@ -80,8 +80,15 @@ const DEFAULT_SETTINGS: GeneratorSettings = {
   },
   tun_interface_name: null,
   mixed_port: 2080,
-  local_dns: "223.5.5.5",
-  remote_dns: "https://dns.google/dns-query",
+  // Cloudflare 1.1.1.1 — globally reachable. Aliyun 223.5.5.5 only
+  // works from China and times out elsewhere, which breaks the
+  // rule-set fetcher (and the whole internet) when used from
+  // outside China.
+  local_dns: "1.1.1.1",
+  // IP-form DoH endpoint. `dns.google` (hostname) needs DNS to
+  // resolve, which is circular and breaks if the local resolver
+  // can't reach it. Using the IP removes the resolution step.
+  remote_dns: "https://8.8.8.8/dns-query",
   // null → `auto` urltest picks the fastest server.
   // Set to a server tag the moment the user clicks a card in
   // the picker, so the regenerated config boots pinned to it.
