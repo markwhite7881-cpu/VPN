@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    Application manifest for the Tauri-based singbox-client.
+
+    Three things happen here:
+
+    1. We declare compatibility with Windows 10/11 so the OS
+       doesn't run us in "compatibility mode" on newer systems
+       (which would silently strip the privilege request).
+
+    2. We request requireAdministrator so the OS shows a UAC
+       prompt on launch. sing-box TUN mode needs the elevated
+       token to create the TUN interface and to modify the
+       routing table.
+
+    3. We declare DPI awareness (PerMonitorV2) so the WebView2
+       window renders crisply on HiDPI displays.
+
+    The manifest is referenced by app.rc, which RC.EXE compiles
+    into a .res the linker then embeds in the binary.
+  -->
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>
