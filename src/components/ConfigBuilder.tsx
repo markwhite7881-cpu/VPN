@@ -50,7 +50,10 @@ const DEFAULT_SETTINGS: GeneratorSettings = {
   // breaks the rule-set fetcher (and the whole internet) when the
   // local DNS is set to it from outside China.
   local_dns: "1.1.1.1",
-  remote_dns: "https://dns.google/dns-query",
+  // IP-form DoH endpoint. `dns.google` (hostname) needs DNS to
+  // resolve, which is circular and breaks if the local resolver
+  // can't reach it. Using the IP removes the resolution step.
+  remote_dns: "https://8.8.8.8/dns-query",
   // ConfigBuilder is a stand-alone previewer; the live Connect
   // button lives in App.tsx, so pinning to a specific server
   // here isn't very useful — leaving the urltest free to pick.

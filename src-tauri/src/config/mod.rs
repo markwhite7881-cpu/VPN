@@ -621,7 +621,7 @@ fn build_dns(settings: &GeneratorSettings) -> Value {
     let remote_input = settings
         .remote_dns
         .clone()
-        .unwrap_or_else(|| "https://dns.google/dns-query".to_string());
+        .unwrap_or_else(|| "https://8.8.8.8/dns-query".to_string());
 
     let (local_type, local_server) = classify_dns(&local_input);
     let (remote_type, remote_server) = classify_dns(&remote_input);
