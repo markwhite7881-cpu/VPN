@@ -699,3 +699,97 @@ fn split_subscription(text: &str) -> (Vec<String>, bool) {
     }
     (lines, false)
 }
+
+// ── Process enumeration (routing process-name picker) ───────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub name: String,
+}
+
+/// List currently running processes (name + pid).
+///
+/// Used by the routing-rule "process name" picker so the user can
+/// click on a running app instead of typing its .exe name by hand.
+/// Sorted by name (case-insensitive), de-duplicated by name, capped
+/// at 500 entries — a typical Windows desktop has 150-300 processes
+/// so the cap is a safety net for pathological hosts.
+#[tauri::command]
+pub async fn list_processes() -> AppResult<Vec<ProcessInfo>> {
+    use std::collections::BTreeMap;
+
+    let mut sys = sysinfo::System::new();
+    // sysinfo 0.32: refresh_processes takes a `ProcessesToUpdate` and
+    // a "force_refresh" bool. `All` = every process, no filter.
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let mut by_name: BTreeMap<String, sysinfo::Pid> = BTreeMap::new();
+    for (pid, proc_) in sys.processes().iter() {
+        let name = proc_.name().to_string_lossy().trim().to_string();
+        if name.is_empty() || name.len() > 64 {
+            continue;
+        }
+        let key = name.to_ascii_lowercase();
+        // If two processes share a name, keep the lowest pid (it's the
+        // canonical one the user expects — usually the parent).
+        by_name
+            .entry(key)
+            .and_modify(|existing| {
+                if *pid < *existing {
+                    *existing = *pid;
+                }
+            })
+            .or_insert(*pid);
+    }
+
+    let mut out: Vec<ProcessInfo> = by_name
+        .into_iter()
+        .map(|(_, pid)| {
+            let proc_ = sys.process(pid);
+            let name = proc_
+                .map(|p| p.name().to_string_lossy().to_string())
+                .unwrap_or_default();
+            ProcessInfo {
+                pid: pid.as_u32(),
+                name,
+            }
+        })
+        .filter(|p| !p.name.is_empty())
+        .collect();
+    // Stable display order: by name (case-insensitive), ties broken by pid.
+    out.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then(a.pid.cmp(&b.pid))
+    });
+    out.truncate(500);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod process_tests {
+    use super::*;
+
+    /// Smoke test: the command runs without panicking and returns a
+    /// well-formed list on a normal host. We don't assert specific
+    /// process names (machine-dependent) — only the invariants.
+    #[tokio::test]
+    async fn list_processes_returns_well_formed_entries() {
+        let procs = list_processes().await.expect("list_processes ok");
+        let mut prev: Option<String> = None;
+        for p in &procs {
+            assert!(!p.name.is_empty(), "process name must not be empty");
+            if let Some(p_name) = &prev {
+                assert!(
+                    p_name.to_ascii_lowercase() <= p.name.to_ascii_lowercase(),
+                    "list_processes must be sorted by name (case-insensitive)"
+                );
+            }
+            prev = Some(p.name.clone());
+        }
+        // Cap of 500 — sanity check.
+        assert!(procs.len() <= 500, "list_processes must cap at 500 entries");
+    }
+}

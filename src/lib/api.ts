@@ -12,6 +12,7 @@ import type {
   Outbound,
   ParseLinksResult,
   ParsedInput,
+  ProcessInfo,
   ProxiesResponse,
   SingboxVersion,
   StatusReport,
@@ -109,6 +110,11 @@ export const api = {
   applySystemProxy: (host: string, port: number) =>
     call<void>("apply_system_proxy", { host, port }),
   clearSystemProxy: () => call<void>("clear_system_proxy"),
+
+  // Running processes — used by the routing process-name picker
+  // so the user can click on an .exe instead of typing its name.
+  // Returns an empty array outside the Tauri shell (vite dev preview).
+  listProcesses: () => call<ProcessInfo[]>("list_processes"),
 };
 
 export { TauriCommandError };

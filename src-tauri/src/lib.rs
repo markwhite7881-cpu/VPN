@@ -99,6 +99,7 @@ pub fn run() {
             commands::set_autostart,
             commands::apply_system_proxy,
             commands::clear_system_proxy,
+            commands::list_processes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running singbox-client");

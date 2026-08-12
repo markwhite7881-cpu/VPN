@@ -1,0 +1,86 @@
+{
+  "dns": {
+    "final": "local",
+    "servers": [
+      {
+        "server": "223.5.5.5",
+        "tag": "local",
+        "type": "udp"
+      },
+      {
+        "domain_resolver": "local",
+        "server": "dns.google",
+        "tag": "remote",
+        "type": "https"
+      }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "experimental": {
+    "clash_api": {
+      "default_mode": "proxy",
+      "external_controller": "127.0.0.1:9090"
+    }
+  },
+  "http_clients": [
+    {
+      "tag": "rule-set-fetcher"
+    }
+  ],
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "mixed-in",
+      "type": "mixed"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "default": "auto",
+      "outbounds": [
+        "direct"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local",
+    "final": "proxy",
+    "rules": [
+      {
+        "action": "direct",
+        "network": "dns"
+      },
+      {
+        "action": "route",
+        "outbound": "direct",
+        "process_name": [
+          "Telegram.exe",
+          "Discord.exe"
+        ]
+      },
+      {
+        "action": "route",
+        "outbound": "proxy",
+        "process_path": [
+          "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+        ]
+      }
+    ]
+  }
+}

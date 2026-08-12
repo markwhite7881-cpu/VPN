@@ -37,6 +37,12 @@ export interface BinaryInfo {
   size_bytes: number;
 }
 
+/** One running process. Returned by the `list_processes` Tauri command. */
+export interface ProcessInfo {
+  pid: number;
+  name: string;
+}
+
 // --- Parser (
 export type Transport =
   | { kind: "tcp" }

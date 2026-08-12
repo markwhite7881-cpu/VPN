@@ -14,6 +14,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../Button";
+import { ProcessPicker } from "./ProcessPicker";
 import type { CustomRule, Outbound, RuleAction, RuleMatchers } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -261,6 +262,10 @@ export function RuleEditor({ rule, outbounds, onChange }: Props) {
               field="process_name"
               values={m.process_name}
               placeholder="chrome"
+              onChange={(v) => updateArray("process_name", v)}
+            />
+            <ProcessPicker
+              selected={m.process_name ?? []}
               onChange={(v) => updateArray("process_name", v)}
             />
             <ChipField
