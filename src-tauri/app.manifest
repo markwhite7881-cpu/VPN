@@ -17,8 +17,9 @@
     3. We declare DPI awareness (PerMonitorV2) so the WebView2
        window renders crisply on HiDPI displays.
 
-    The manifest is referenced by app.rc, which RC.EXE compiles
-    into a .res the linker then embeds in the binary.
+    The manifest is read by build.rs at compile time and passed
+    to tauri_build::WindowsAttributes::app_manifest(), which
+    embeds it into the binary as an RT_MANIFEST resource.
   -->
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
