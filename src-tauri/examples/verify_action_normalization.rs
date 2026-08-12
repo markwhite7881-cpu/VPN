@@ -1,17 +1,20 @@
-//! Verify the action-normalization fix end-to-end.
+//! Verify the action-normalization + matcher-flattening fixes
+//! end-to-end.
 //!
-//! Background: a user reported that sing-box refused to start with
-//!   route.rules[2].action: json: cannot unmarshal object into Go
-//!   struct field _RuleAction.action of type string
+//! Three bugs were reported, all caused by UI-side data shapes that
+//! don't match sing-box's rule schema:
 //!
-//! Root cause: the UI stores rules with `action: {kind: "route",
-//! outbound: "X"}` (object, ergonomic for editing) but sing-box 1.14+
-//! wants `action: "route"` (string) with `outbound` lifted to the
-//! top level.
+//! 1. `action` is an OBJECT in the UI ({kind, outbound}), but
+//!    sing-box 1.14+ wants a STRING with `outbound` lifted to the
+//!    top level.
+//! 2. UI-only fields `id`, `label`, `enabled` were leaking through
+//!    to sing-box → "unknown field" errors.
+//! 3. UI nests matchers inside a `matchers: {...}` object, but
+//!    sing-box wants them flat on the rule itself.
 //!
-//! This example builds a config with the UI's object form and runs
-//! `sing-box check` to confirm the fix produces a sing-box-valid
-//! file. Before the fix this would fail with the exact error above.
+//! This example builds a config with the UI's full real-world shape
+//! and runs `sing-box check` to confirm the fixes produce a
+//! sing-box-valid file.
 
 use std::env;
 use std::fs;
@@ -33,12 +36,14 @@ fn main() {
 
     // --- 1. Build a config with the UI's full real-world shape -----
     // Each rule carries:
-    //   - `id` (React key) — must be stripped before sing-box
-    //   - `label` (display name) — must be stripped before sing-box
-    //   - `enabled` (on/off toggle) — must be stripped before sing-box
-    //   - `action` as an OBJECT (UI form) — must be normalized to
-    //     sing-box's string form
-    // Both bugs (action object + UI-only fields) are exercised here.
+    //   - `id` (React key) — stripped
+    //   - `label` (display name) — stripped
+    //   - `enabled` (on/off toggle) — stripped (disabled rules are
+    //      dropped entirely, not marked in-place)
+    //   - `matchers` wrapping object — flattened into top-level
+    //      sibling fields
+    //   - `action` as an OBJECT — normalized to sing-box's string
+    //      form, with `outbound` lifted to a top-level field
     let settings = GeneratorSettings {
         tunnel_mode: TunnelMode::SystemProxy,
         routing: RoutingOptions {
@@ -47,35 +52,45 @@ fn main() {
                     "id": "rule-001",
                     "label": "Bypass LAN",
                     "enabled": true,
-                    "ip_cidr": ["10.0.0.0/8", "192.168.0.0/16"],
+                    "matchers": {
+                        "ip_cidr": ["10.0.0.0/8", "192.168.0.0/16"],
+                    },
                     "action": {"kind": "route", "outbound": "direct"},
                 }),
                 json!({
                     "id": "rule-002",
                     "label": "Route example.com via proxy",
                     "enabled": true,
-                    "domain_suffix": ["example.com"],
+                    "matchers": {
+                        "domain_suffix": ["example.com"],
+                    },
                     "action": {"kind": "route", "outbound": "proxy"},
                 }),
                 json!({
                     "id": "rule-003",
                     "label": "Telegram through proxy",
                     "enabled": true,
-                    "process_name": ["Telegram.exe"],
+                    "matchers": {
+                        "process_name": ["Telegram.exe"],
+                    },
                     "action": {"kind": "route", "outbound": "proxy"},
                 }),
                 json!({
                     "id": "rule-004",
                     "label": "Block IPv6",
                     "enabled": true,
-                    "ip_version": 6,
+                    "matchers": {
+                        "ip_version": 6,
+                    },
                     "action": {"kind": "reject"},
                 }),
                 json!({
                     "id": "rule-005",
                     "label": "Hijack DNS",
                     "enabled": true,
-                    "network": "udp",
+                    "matchers": {
+                        "network": "udp",
+                    },
                     "action": {"kind": "hijack-dns"},
                 }),
                 // A disabled rule — should be DROPPED entirely (not
@@ -84,7 +99,19 @@ fn main() {
                     "id": "rule-006",
                     "label": "disabled rule",
                     "enabled": false,
-                    "ip_cidr": ["8.8.8.8/32"],
+                    "matchers": {
+                        "ip_cidr": ["8.8.8.8/32"],
+                    },
+                    "action": {"kind": "route", "outbound": "direct"},
+                }),
+                // A rule with an empty matchers object — should also
+                // be dropped (no meaningful matchers → sing-box would
+                // reject it).
+                json!({
+                    "id": "rule-007",
+                    "label": "empty matchers",
+                    "enabled": true,
+                    "matchers": {},
                     "action": {"kind": "route", "outbound": "direct"},
                 }),
             ],
@@ -98,24 +125,23 @@ fn main() {
     };
     let cfg = Config::build(&[], &settings);
 
-    // --- 2. Assert: all user rules have action as a STRING, and no
-    //         UI-only fields leak through, and the disabled rule
-    //         is dropped entirely.
+    // --- 2. Assert: all user rules are clean sing-box shape --------
     let rules = cfg["route"]["rules"].as_array().expect("route.rules");
     println!("Generated {} route rules:", rules.len());
     for (i, r) in rules.iter().enumerate() {
         println!("  [{}] {}", i, r);
     }
-    // System rules come first: dns-bypass + sniff. The user rules
-    // follow, except the disabled one which is dropped.
-    // So: 2 system + 5 user (not 6, because rule-006 is disabled) = 7.
+    // System rules come first: dns-bypass + sniff. Then 5 user
+    // rules (rule-006 disabled, rule-007 empty matchers, both
+    // dropped). Total: 2 + 5 = 7.
     assert_eq!(
         rules.len(),
         7,
-        "expected 2 system + 5 user (the disabled rule must be dropped)"
+        "expected 2 system + 5 user (disabled + empty-matcher rules must be dropped)"
     );
     let user_rules = &rules[2..];
     for (i, r) in user_rules.iter().enumerate() {
+        // action must be a string
         let action = &r["action"];
         assert!(
             action.is_string(),
@@ -123,39 +149,43 @@ fn main() {
             i,
             action
         );
-        // UI-only fields must NOT leak through
+        // No `matchers` wrapper allowed
         assert!(
-            r.get("id").is_none(),
-            "user rule {}: id must be stripped (UI-only), got: {}",
-            i,
-            r.get("id").unwrap()
+            r.get("matchers").is_none(),
+            "user rule {}: matchers wrapper must be flattened",
+            i
         );
+        // UI-only fields must NOT leak through
+        assert!(r.get("id").is_none(), "user rule {}: id must be stripped", i);
         assert!(
             r.get("label").is_none(),
-            "user rule {}: label must be stripped (UI-only)",
+            "user rule {}: label must be stripped",
             i
         );
         assert!(
             r.get("enabled").is_none(),
-            "user rule {}: enabled must be stripped (UI-only)",
+            "user rule {}: enabled must be stripped",
             i
         );
     }
-    // The disabled rule (id rule-006) must not appear anywhere in the
-    // emitted config.
+    // Disabled and empty-matcher rules must not appear anywhere.
     for r in rules {
         let s = r.to_string();
         assert!(
             !s.contains("8.8.8.8"),
-            "disabled rule with 8.8.8.8/32 must be dropped, found: {s}"
+            "disabled rule (8.8.8.8) must be dropped, found: {s}"
         );
         assert!(
             !s.contains("rule-006"),
             "disabled rule id must be dropped, found in: {s}"
         );
+        assert!(
+            !s.contains("rule-007"),
+            "empty-matcher rule id must be dropped, found in: {s}"
+        );
     }
-    println!("\n  ✓ all user rules: action is STRING, no UI-only fields leak");
-    println!("  ✓ disabled rule dropped entirely");
+    println!("\n  ✓ all user rules: action is STRING, matchers flattened, no UI fields leak");
+    println!("  ✓ disabled + empty-matcher rules dropped");
 
     // --- 3. Run `sing-box check` ---------------------------------
     let out_path = here
@@ -181,11 +211,11 @@ fn main() {
             print!("{stdout}{stderr}");
             if o.status.success() {
                 println!(
-                    "\n✅ sing-box check passed — action normalization is correct end-to-end"
+                    "\n✅ sing-box check passed — action normalization + matcher flattening are correct end-to-end"
                 );
             } else {
                 panic!(
-                    "❌ sing-box check failed (exit {:?}) — the action-normalization fix is incomplete",
+                    "❌ sing-box check failed (exit {:?}) — the fix is incomplete",
                     o.status.code()
                 );
             }
