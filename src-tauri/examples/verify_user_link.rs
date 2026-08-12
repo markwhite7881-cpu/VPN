@@ -99,18 +99,46 @@ fn main() {
     let mut outbounds = vec![vless];
     outbounds.extend(sub_outbounds);
 
-    // Этап 7 routing presets — включаем всё, чтобы проверить что
-    // генератор не упирается в "сырой" формат sing-box 1.13.
+    // Этап 7 routing — Routing 2.0: разные правила (bypass LAN, reject
+    // IPv6, block QUIC) + 2 rule-set-based правила (bypass RU, block
+    // ads). Чек-тест: генератор должен пройти `sing-box check`.
+    use serde_json::json;
     let settings = GeneratorSettings {
         tunnel_mode: TunnelMode::SystemProxy,
         routing: RoutingOptions {
-            bypass_lan: true,
-            reject_ipv6: true,
-            block_ads: true,
-            bypass_cn: false,
-            bypass_ru: true,
-            block_quic: true,
+            rules: vec![
+                json!({
+                    "ip_cidr": [
+                        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                        "127.0.0.0/8", "169.254.0.0/16"
+                    ],
+                    "action": "route", "outbound": "direct"
+                }),
+                json!({ "ip_version": 6, "action": "reject" }),
+                json!({ "port_range": ["443:443"], "network": "udp", "action": "reject" }),
+                json!({ "rule_set": "geoip-ru", "action": "route", "outbound": "direct" }),
+                json!({ "rule_set": "geosite-ads", "action": "reject" }),
+            ],
+            rule_sets: vec![
+                json!({
+                    "tag": "geoip-ru",
+                    "type": "remote",
+                    "format": "binary",
+                    "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs",
+                    "update_interval": "1d"
+                }),
+                json!({
+                    "tag": "geosite-ads",
+                    "type": "remote",
+                    "format": "binary",
+                    "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
+                    "update_interval": "1d"
+                }),
+            ],
+            sniff: true,
             final_outbound: "proxy".to_string(),
+            auto_detect_interface: true,
+            default_domain_resolver: "local".to_string(),
         },
         ..GeneratorSettings::default()
     };

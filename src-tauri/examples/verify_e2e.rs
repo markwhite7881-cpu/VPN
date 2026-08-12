@@ -26,6 +26,7 @@ fn main() {
             mixed_port: Some(2080),
             local_dns: Some("223.5.5.5".to_string()),
             remote_dns: Some("https://dns.google/dns-query".to_string()),
+            default_outbound: None,
         },
     );
     let out_path = std::env::temp_dir().join("verify_e2e.json");

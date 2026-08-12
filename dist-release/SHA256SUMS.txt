@@ -1,0 +1,3 @@
+793d78316391ade62c36d64fbf93776d7481238d10ebca9ba6524f5bdaecd5df  singbox-client-v0.2.0-portable-windows-x64.zip
+ea1f226dd8e9218881faa1ec4e3d36f706a4429fe0acbe03f490aaa33f2f9585  singbox-client-v0.2.0-windows-x64.msi
+1b016d4dd94f106e61e46380b5fefc00ce3bb8f286694e97ba674e0fa7ce8777  singbox-client-v0.2.0-windows-x64-setup.exe

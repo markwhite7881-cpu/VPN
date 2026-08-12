@@ -1,5 +1,6 @@
 //! Quick sanity check: generate a TUN config from the current
 //! settings and run `sing-box check` on it.
+use serde_json::json;
 use singbox_client_lib::config::{Config, GeneratorSettings, RoutingOptions, TunnelMode};
 use singbox_client_lib::parser::parse_link;
 
@@ -16,19 +17,30 @@ fn main() {
         &GeneratorSettings {
             tunnel_mode: TunnelMode::Tun,
             routing: RoutingOptions {
-                bypass_lan: true,
-                reject_ipv6: true,
-                block_quic: false,
-                block_ads: false,
-                bypass_cn: false,
-                bypass_ru: false,
+                // Routing 2.0: mirror a typical "safe defaults" rule list.
+                rules: vec![
+                    json!({
+                        "ip_cidr": [
+                            "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                            "127.0.0.0/8", "169.254.0.0/16"
+                        ],
+                        "action": "route",
+                        "outbound": "direct"
+                    }),
+                    json!({ "ip_version": 6, "action": "reject" }),
+                ],
+                rule_sets: vec![],
+                sniff: true,
                 final_outbound: "proxy".to_string(),
+                auto_detect_interface: true,
+                default_domain_resolver: "local".to_string(),
             },
             clash_api: singbox_client_lib::config::ClashApiOptions::default(),
             tun_interface_name: None,
             mixed_port: Some(2080),
             local_dns: Some("223.5.5.5".to_string()),
             remote_dns: Some("https://dns.google/dns-query".to_string()),
+            default_outbound: None,
         },
     );
     let out_path = std::env::temp_dir().join("verify_tun.json");

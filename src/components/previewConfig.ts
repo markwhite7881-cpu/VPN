@@ -85,66 +85,52 @@ export function previewToSingboxJson(
   }
 
   // ---- route ----
+  // Routing 2.0: rules and rule-sets come straight from the user's
+  // edited list (see `src/components/routing/RoutingTab.tsx`). We just
+  // serialize them into the sing-box JSON shape here. The actual
+  // authority is Rust (`src-tauri/src/config/mod.rs::generate_config`),
+  // which uses the exact same logic. Keep them in sync.
   const rules: Record<string, unknown>[] = [];
   const ruleSets: Record<string, unknown>[] = [];
   const r = settings.routing;
-  // Sniff protocol (replaces legacy `sniff: true` in inbounds).
-  rules.push({ action: "sniff" });
-  if (r.reject_ipv6) {
-    rules.push({ ip_version: 6, action: "reject" });
+  if (r.sniff) {
+    rules.push({ action: "sniff" });
   }
-  if (r.block_quic) {
-    rules.push({
-      port_range: ["443:443"],
-      network: "udp",
-      action: "reject",
-    });
+  for (const rule of r.rules) {
+    if (!rule.enabled) continue;
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rule.matchers)) {
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v) && v.length === 0) continue;
+      cleaned[k] = v;
+    }
+    if (Object.keys(cleaned).length === 0) continue;
+    if (rule.action.kind === "route") {
+      rules.push({ ...cleaned, action: "route", outbound: rule.action.outbound });
+    } else if (rule.action.kind === "reject") {
+      rules.push({ ...cleaned, action: "reject" });
+    } else if (rule.action.kind === "hijack-dns") {
+      rules.push({ ...cleaned, action: "hijack-dns" });
+    } else if (rule.action.kind === "sniff") {
+      rules.push({ ...cleaned, action: "sniff" });
+    } else if (rule.action.kind === "resolve") {
+      const o: Record<string, unknown> = { ...cleaned, action: "resolve" };
+      if (rule.action.server) o.server = rule.action.server;
+      if (rule.action.strategy) o.strategy = rule.action.strategy;
+      rules.push(o);
+    }
   }
-  if (r.bypass_lan) {
-    rules.push({
-      ip_cidr: [
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "127.0.0.0/8",
-        "169.254.0.0/16",
-      ],
-      action: "direct",
-    });
-  }
-  // External rule-sets (sing-box 1.12+ removed built-in geo matchers).
-  if (r.bypass_cn) {
-    ruleSets.push({
-      tag: "rs-cn",
-      type: "remote",
-      format: "binary",
-      url: "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip-cn.srs",
-      download_detour: "direct",
-      update_interval: "1d",
-    });
-    rules.push({ rule_set: "rs-cn", action: "direct" });
-  }
-  if (r.bypass_ru) {
-    ruleSets.push({
-      tag: "rs-ru",
-      type: "remote",
-      format: "binary",
-      url: "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip-ru.srs",
-      download_detour: "direct",
-      update_interval: "1d",
-    });
-    rules.push({ rule_set: "rs-ru", action: "direct" });
-  }
-  if (r.block_ads) {
-    ruleSets.push({
-      tag: "rs-ads",
-      type: "remote",
-      format: "binary",
-      url: "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite-ads.srs",
-      download_detour: "direct",
-      update_interval: "1d",
-    });
-    rules.push({ rule_set: "rs-ads", action: "reject" });
+  for (const rs of r.rule_sets) {
+    if (!rs.enabled) continue;
+    const o: Record<string, unknown> = {
+      tag: rs.tag,
+      type: rs.type,
+    };
+    if (rs.format) o.format = rs.format;
+    if (rs.type === "remote" && rs.url) o.url = rs.url;
+    if (rs.type === "local" && rs.path) o.path = rs.path;
+    if (rs.update_interval) o.update_interval = rs.update_interval;
+    ruleSets.push(o);
   }
 
   // ---- dns (sing-box 1.12+ typed format) ----
@@ -183,8 +169,8 @@ export function previewToSingboxJson(
       rules,
       ...(ruleSets.length > 0 ? { rule_set: ruleSets } : {}),
       final: settings.routing.final_outbound,
-      auto_detect_interface: true,
-      default_domain_resolver: "local",
+      auto_detect_interface: settings.routing.auto_detect_interface,
+      default_domain_resolver: settings.routing.default_domain_resolver,
     },
     experimental: {
       clash_api: {

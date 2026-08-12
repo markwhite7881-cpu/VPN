@@ -3,6 +3,7 @@ import {
   Home,
   Link2,
   Power,
+  Route,
   Settings2,
   ShieldCheck,
   Terminal,
@@ -16,6 +17,7 @@ import { HomeTab } from "@/components/HomeTab";
 import { ServersTab } from "@/components/ServersTab";
 import { LogsTab } from "@/components/LogsTab";
 import { ConfigTab } from "@/components/ConfigTab";
+import { RoutingTab } from "@/components/routing/RoutingTab";
 import { TauriCommandError, api } from "@/lib/api";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useGeoIp } from "@/hooks/useGeoIp";
@@ -23,10 +25,14 @@ import { isSupported } from "@/lib/outbound";
 import { basename } from "@/lib/utils";
 import type {
   BinaryInfo,
+  CustomRule,
+  CustomRuleSet,
   GeneratorSettings,
   LogLine,
   Outbound,
   ParseFailure,
+  RoutingOptions,
+  RoutingOptionsV1,
   SingboxVersion,
   Status,
   StatusReport,
@@ -37,7 +43,7 @@ import type {
 // back to mock data so the UI is still demoable.
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-const TAB_KEYS = ["home", "servers", "config", "logs"] as const;
+const TAB_KEYS = ["home", "servers", "config", "routing", "logs"] as const;
 type TabId = (typeof TAB_KEYS)[number];
 const DEFAULT_TAB: TabId = "home";
 
@@ -53,19 +59,19 @@ function readStoredTab(): TabId {
   return DEFAULT_TAB;
 }
 
-const SETTINGS_KEY = "singbox-client.settings.v1";
+const SETTINGS_KEY = "singbox-client.settings.v2";
+const SETTINGS_KEY_V1 = "singbox-client.settings.v1";
 
 /** Default settings — kept in sync with the Rust side defaults. */
 const DEFAULT_SETTINGS: GeneratorSettings = {
   tunnel_mode: "system_proxy",
   routing: {
-    bypass_lan: true,
-    reject_ipv6: true,
-    block_quic: false,
-    block_ads: false,
-    bypass_cn: false,
-    bypass_ru: false,
+    rules: [],
+    rule_sets: [],
+    sniff: true,
     final_outbound: "proxy",
+    auto_detect_interface: true,
+    default_domain_resolver: "local",
   },
   clash_api: {
     external_controller: "127.0.0.1:9090",
@@ -82,20 +88,184 @@ const DEFAULT_SETTINGS: GeneratorSettings = {
   default_outbound: null,
 };
 
+function freshId(prefix: string) {
+  return prefix + "-" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36);
+}
+
+/**
+ * Convert v0.1.0 boolean flags to a v2 RoutingOptions.
+ *
+ * Each ON boolean becomes one CustomRule in the new `rules` array. If
+ * the rule depends on a rule-set (bypass_cn/geoip-cn, block_ads/
+ * geosite-ads, bypass_ru/geoip-ru), the corresponding Loyalsoldier
+ * rule-set is added to `rule_sets` so the rule actually fires.
+ */
+function migrateRoutingV1ToV2(v1: RoutingOptionsV1): RoutingOptions {
+  const rules: CustomRule[] = [];
+  const ruleSets: CustomRuleSet[] = [];
+
+  // 1. LAN bypass — no rule-set needed.
+  if (v1.bypass_lan) {
+    rules.push({
+      id: freshId("r"),
+      label: "Bypass LAN (migrated)",
+      enabled: true,
+      matchers: {
+        ip_cidr: [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "::1/128",
+          "fc00::/7",
+          "fe80::/10",
+        ],
+      },
+      action: { kind: "route", outbound: "direct" },
+    });
+  }
+
+  // 2. IPv6 reject — no rule-set.
+  if (v1.reject_ipv6) {
+    rules.push({
+      id: freshId("r"),
+      label: "Reject IPv6 (migrated)",
+      enabled: true,
+      matchers: { ip_version: 6 },
+      action: { kind: "reject" },
+    });
+  }
+
+  // 3. QUIC reject — no rule-set.
+  if (v1.block_quic) {
+    rules.push({
+      id: freshId("r"),
+      label: "Block QUIC (migrated)",
+      enabled: true,
+      matchers: { port_range: ["443:443"], network: ["udp"] },
+      action: { kind: "reject" },
+    });
+  }
+
+  // 4. CN bypass — needs geoip-cn.
+  if (v1.bypass_cn) {
+    if (!ruleSets.some((rs) => rs.tag === "geoip-cn")) {
+      ruleSets.push({
+        tag: "geoip-cn",
+        type: "remote",
+        format: "binary",
+        url: "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip-cn.srs",
+        update_interval: "1d",
+        enabled: true,
+      });
+    }
+    rules.push({
+      id: freshId("r"),
+      label: "Bypass CN (migrated)",
+      enabled: true,
+      matchers: { rule_set: ["geoip-cn"] },
+      action: { kind: "route", outbound: "direct" },
+    });
+  }
+
+  // 5. RU bypass — needs geoip-ru.
+  if (v1.bypass_ru) {
+    if (!ruleSets.some((rs) => rs.tag === "geoip-ru")) {
+      ruleSets.push({
+        tag: "geoip-ru",
+        type: "remote",
+        format: "binary",
+        url: "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip-ru.srs",
+        update_interval: "1d",
+        enabled: true,
+      });
+    }
+    rules.push({
+      id: freshId("r"),
+      label: "Bypass RU (migrated)",
+      enabled: true,
+      matchers: { rule_set: ["geoip-ru"] },
+      action: { kind: "route", outbound: "direct" },
+    });
+  }
+
+  // 6. Ad blocking — needs geosite-ads.
+  if (v1.block_ads) {
+    if (!ruleSets.some((rs) => rs.tag === "geosite-ads")) {
+      ruleSets.push({
+        tag: "geosite-ads",
+        type: "remote",
+        format: "binary",
+        url: "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite-ads.srs",
+        update_interval: "1d",
+        enabled: true,
+      });
+    }
+    rules.push({
+      id: freshId("r"),
+      label: "Block Ads (migrated)",
+      enabled: true,
+      matchers: { rule_set: ["geosite-ads"] },
+      action: { kind: "reject" },
+    });
+  }
+
+  return {
+    rules,
+    rule_sets: ruleSets,
+    sniff: true,
+    final_outbound: v1.final_outbound || "proxy",
+    auto_detect_interface: true,
+    default_domain_resolver: "local",
+  };
+}
+
 function loadSettings(): GeneratorSettings {
   if (typeof window === "undefined") return DEFAULT_SETTINGS;
   try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(raw);
-    // Shallow-merge so missing fields from older versions fall back
-    // to the default rather than producing an undefined crash.
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      routing: { ...DEFAULT_SETTINGS.routing, ...(parsed.routing ?? {}) },
-      clash_api: { ...DEFAULT_SETTINGS.clash_api, ...(parsed.clash_api ?? {}) },
-    };
+    // Try v2 first.
+    const rawV2 = window.localStorage.getItem(SETTINGS_KEY);
+    if (rawV2) {
+      const parsed = JSON.parse(rawV2);
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        routing: { ...DEFAULT_SETTINGS.routing, ...(parsed.routing ?? {}) },
+        clash_api: { ...DEFAULT_SETTINGS.clash_api, ...(parsed.clash_api ?? {}) },
+      };
+    }
+    // Fall back to v1 (silent migration).
+    const rawV1 = window.localStorage.getItem(SETTINGS_KEY_V1);
+    if (rawV1) {
+      try {
+        const v1 = JSON.parse(rawV1) as { routing?: RoutingOptionsV1; [k: string]: unknown };
+        const v1Routing: RoutingOptionsV1 = v1.routing ?? {
+          bypass_lan: true,
+          reject_ipv6: true,
+          block_quic: false,
+          block_ads: false,
+          bypass_cn: false,
+          bypass_ru: false,
+          final_outbound: "proxy",
+        };
+        const migrated: GeneratorSettings = {
+          ...DEFAULT_SETTINGS,
+          ...v1,
+          routing: migrateRoutingV1ToV2(v1Routing),
+        };
+        // Persist as v2 immediately and drop v1.
+        try {
+          window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(migrated));
+          window.localStorage.removeItem(SETTINGS_KEY_V1);
+        } catch { /* ignore */ }
+        return migrated;
+      } catch {
+        // Corrupt v1 — fall through to defaults.
+        return DEFAULT_SETTINGS;
+      }
+    }
+    return DEFAULT_SETTINGS;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -694,6 +864,22 @@ export default function App() {
             onConfigPath={(p) => {
               if (p) setConfigPath(p);
             }}
+          />
+        ),
+      },
+      {
+        id: "routing",
+        label: "Routing",
+        icon: Route,
+        badge:
+          settings.routing.rules.length + settings.routing.rule_sets.length > 0
+            ? settings.routing.rules.length + settings.routing.rule_sets.length
+            : undefined,
+        content: (
+          <RoutingTab
+            profiles={profiles}
+            settings={settings}
+            onSettingsChange={setSettings}
           />
         ),
       },

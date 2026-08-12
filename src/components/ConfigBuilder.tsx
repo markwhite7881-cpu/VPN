@@ -31,13 +31,12 @@ const inTauri =
 const DEFAULT_SETTINGS: GeneratorSettings = {
   tunnel_mode: "system_proxy",
   routing: {
-    bypass_lan: true,
-    reject_ipv6: true,
-    block_ads: false,
-    bypass_cn: false,
-    bypass_ru: false,
-    block_quic: false,
+    rules: [],
+    rule_sets: [],
+    sniff: true,
     final_outbound: "proxy",
+    auto_detect_interface: true,
+    default_domain_resolver: "local",
   },
   clash_api: {
     external_controller: "127.0.0.1:9090",
@@ -137,15 +136,6 @@ export function ConfigBuilder({
     key: K,
     val: GeneratorSettings[K],
   ) => onSettingsChange({ ...settings, [key]: val });
-
-  const updateRouting = <K extends keyof GeneratorSettings["routing"]>(
-    key: K,
-    val: GeneratorSettings["routing"][K],
-  ) =>
-    onSettingsChange({
-      ...settings,
-      routing: { ...settings.routing, [key]: val },
-    });
 
   const onGenerate = async () => {
     setGenerating(true);
@@ -311,74 +301,9 @@ export function ConfigBuilder({
           </div>
         </div>
 
-        {/* Routing toggles + DNS row */}
+        {/* Routing lives on the dedicated "Routing" tab (Routing 2.0).
+            This block now only contains network/transport + DNS settings. */}
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs">
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5"
-              checked={settings.routing.bypass_lan}
-              onChange={(e) => updateRouting("bypass_lan", e.target.checked)}
-            />
-            <span>Bypass LAN (10/8, 192.168/16, …)</span>
-          </label>
-          <label className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs">
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5"
-              checked={settings.routing.reject_ipv6}
-              onChange={(e) => updateRouting("reject_ipv6", e.target.checked)}
-            />
-            <span>Reject IPv6</span>
-          </label>
-          <label
-            className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs"
-            title="Reject UDP/443 — prevents QUIC upgrades that bypass SNI-based DPI"
-          >
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5"
-              checked={settings.routing.block_quic}
-              onChange={(e) => updateRouting("block_quic", e.target.checked)}
-            />
-            <span>Block QUIC (UDP/443)</span>
-          </label>
-          <label
-            className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs"
-            title="Download Loyalsoldier/v2ray-rules-dat geosite-ads.srs on sing-box start; needs network to github raw."
-          >
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5"
-              checked={settings.routing.block_ads}
-              onChange={(e) => updateRouting("block_ads", e.target.checked)}
-            />
-            <span>Block ads (remote rule-set)</span>
-          </label>
-          <label
-            className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs"
-            title="Download Loyalsoldier/v2ray-rules-dat geoip-cn.srs on sing-box start; needs network to github raw."
-          >
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5"
-              checked={settings.routing.bypass_cn}
-              onChange={(e) => updateRouting("bypass_cn", e.target.checked)}
-            />
-            <span>Bypass CN (remote rule-set)</span>
-          </label>
-          <label
-            className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs"
-            title="Download Loyalsoldier/v2ray-rules-dat geoip-ru.srs on sing-box start; needs network to github raw."
-          >
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5"
-              checked={settings.routing.bypass_ru}
-              onChange={(e) => updateRouting("bypass_ru", e.target.checked)}
-            />
-            <span>Bypass RU (remote rule-set)</span>
-          </label>
           <label className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs">
             <span className="text-muted-foreground">Mixed port</span>
             <input

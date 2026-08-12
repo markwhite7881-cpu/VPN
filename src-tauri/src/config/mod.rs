@@ -36,28 +36,42 @@ pub enum TunnelMode {
     None,
 }
 
-/// Which built-in rule-sets / behaviours to enable.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Routing 2.0 — flat rule list + rule-set list. The TS side is the
+/// source of truth for the *shape*; the Rust side passes the JSON
+/// structures through to the generated sing-box config. The `matchers`
+/// and `action` fields are free-form `Value` because mirroring the
+/// entire sing-box rule vocabulary in typed Rust would be a lot of
+/// maintenance for very little gain — sing-box itself is the validator.
+///
+/// Note: replaces the v0.1.0 boolean flags. The frontend performs a
+/// silent v1 → v2 migration in `loadSettings` so existing users keep
+/// their routing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RoutingOptions {
-    /// Route RFC1918 / loopback / link-local addresses directly.
-    pub bypass_lan: bool,
-    /// Reject all IPv6 (sing-box default for many users).
-    pub reject_ipv6: bool,
-    /// Reject outbound UDP/443 (QUIC). Useful for some DPI setups.
-    pub block_quic: bool,
-    /// Reject ad-related domains via a `route.rule_set` reference.
-    /// sing-box 1.12+ removed the in-binary `geosite:` matcher, so this
-    /// requires an external rule-set file (see `RULE_SET_*` URLs).
-    /// The rule is **not** emitted when this flag is set without a
-    /// matching `route.rule_set` entry, otherwise `sing-box check`
-    /// fails. Currently always disabled in code; see `build_route`.
-    pub block_ads: bool,
-    /// Send China geo sites / IPs direct. Same caveat as `block_ads`.
-    pub bypass_cn: bool,
-    /// Send RU geo IPs direct. Same caveat.
-    pub bypass_ru: bool,
-    /// What `route.final` points to. Usually the selector.
+    /// Ordered rule list (first match wins). Empty matchers + action
+    /// `"route"` is the "default" rule.
+    #[serde(default)]
+    pub rules: Vec<Value>,
+    /// External rule-sets (Loyalsoldier, meta-rules-dat, custom URL).
+    #[serde(default)]
+    pub rule_sets: Vec<Value>,
+    /// Push `{ action: "sniff" }` at the top of the rules list.
+    /// Mirrors the legacy `inbound.sniff` behaviour, now a route action.
+    #[serde(default = "default_true")]
+    pub sniff: bool,
+    /// `route.final` outbound tag. Usually the "proxy" selector.
     pub final_outbound: String,
+    /// `route.auto_detect_interface` — required for TUN to avoid
+    /// routing loops on Win / Mac / Linux.
+    #[serde(default = "default_true")]
+    pub auto_detect_interface: bool,
+    /// `route.default_domain_resolver` — the tag of the DNS server used
+    /// to resolve outbound hostnames. Almost always "local".
+    pub default_domain_resolver: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Clash API settings (used by the UI for switching + traffic).
@@ -107,19 +121,24 @@ pub struct GeneratorSettings {
     pub default_outbound: Option<String>,
 }
 
+impl Default for RoutingOptions {
+    fn default() -> Self {
+        Self {
+            rules: Vec::new(),
+            rule_sets: Vec::new(),
+            sniff: true,
+            final_outbound: "proxy".to_string(),
+            auto_detect_interface: true,
+            default_domain_resolver: "local".to_string(),
+        }
+    }
+}
+
 impl Default for GeneratorSettings {
     fn default() -> Self {
         Self {
             tunnel_mode: TunnelMode::SystemProxy,
-            routing: RoutingOptions {
-                bypass_lan: true,
-                reject_ipv6: true,
-                block_quic: false,
-                block_ads: false,
-                bypass_cn: false,
-                bypass_ru: false,
-                final_outbound: "proxy".to_string(),
-            },
+            routing: RoutingOptions::default(),
             clash_api: ClashApiOptions::default(),
             tun_interface_name: None,
             mixed_port: Some(2080),
@@ -324,103 +343,44 @@ fn build_inbounds(settings: &GeneratorSettings) -> Vec<Value> {
 }
 
 fn build_route(settings: &GeneratorSettings) -> Value {
-    let mut rules: Vec<Value> = Vec::new();
-    let mut rule_sets: Vec<Value> = Vec::new();
+    // Routing 2.0: the user edits a list of rule objects (sing-box JSON
+    // shape) and a list of rule-set objects. We pass them through
+    // verbatim, with three small extras that we always prepend:
+    //
+    //   1. `{ network: "dns", action: "direct" }` — never route DNS
+    //      through the proxy. Without this, a flaky DoH upstream would
+    //      black-hole every connection in TUN mode.
+    //   2. `{ action: "sniff" }` (if the user has it on) — required so
+    //      later rules can match by domain.
+    //   3. Disabled rules and rule-sets are skipped here (not at
+    //      frontend edit time), so the Rust side is the authority.
     let r = &settings.routing;
 
-    // Order matters — first matching rule wins. We want:
-    //   0. DNS bypass — never route DNS queries through the proxy.
-    //      Without this rule, a flaky DoH upstream would black-hole
-    //      every connection in TUN mode.
-    //   1. sniff protocol (so later rules can match by domain)
-    //   2. drop IPv6 / QUIC
-    //   3. direct for LAN
-    //   4. rule_set-based: bypass CN/RU, block ads (all optional)
-    //   5. everything else → route.final (the "proxy" selector)
+    let mut rules: Vec<Value> = Vec::new();
+    // 0. DNS bypass — always on, hard-coded.
     rules.push(json!({ "network": "dns", "action": "direct" }));
-    rules.push(json!({ "action": "sniff" }));
-
-    if r.reject_ipv6 {
-        rules.push(json!({ "ip_version": 6, "action": "reject" }));
+    // 1. Optional sniff action.
+    if r.sniff {
+        rules.push(json!({ "action": "sniff" }));
+    }
+    // 2. User-defined rules.
+    for rule in &r.rules {
+        if !is_rule_enabled(rule) {
+            continue;
+        }
+        // Drop empty / no-op rules (would fail `sing-box check`).
+        let cleaned = strip_empty_fields(rule);
+        if has_meaningful_matchers(&cleaned) {
+            rules.push(cleaned);
+        }
     }
 
-    if r.block_quic {
-        // Reject UDP/443 — QUIC. Prevents the GFW/DPI from upgrading
-        // the connection before our TLS dial.
-        rules.push(json!({
-            "port_range": ["443:443"],
-            "network": "udp",
-            "action": "reject"
-        }));
-    }
-
-    if r.bypass_lan {
-        // RFC1918 + loopback + link-local
-        rules.push(json!({
-            "ip_cidr": [
-                "10.0.0.0/8",
-                "172.16.0.0/12",
-                "192.168.0.0/16",
-                "127.0.0.0/8",
-                "169.254.0.0/16"
-            ],
-            "action": "direct"
-        }));
-    }
-
-    // sing-box 1.12+ requires external rule-set files for `geosite:` /
-    // `geoip:` matchers. We pull them from SagerNet's official `rule-set`
-    // branches (sing-geosite for domains, sing-geoip for IPs), which are
-    // the canonical sing-box 1.14+ sources — Loyalsoldier/v2ray-rules-dat
-    // never shipped sing-box format and its 404s would crash the service.
-    //
-    // Each rule-set uses the route-level `default_http_client` (defined
-    // in `build`) — `rule-set-fetcher` — which fetches via the system
-    // network (chicken-and-egg trap: can't route rule-set download
-    // through the proxy the rule-set is configuring). `download_detour`
-    // is gone (deprecated in 1.14, will be removed in 1.16).
-    if r.bypass_cn {
-        rule_sets.push(json!({
-            "tag": "rs-cn",
-            "type": "remote",
-            "format": "binary",
-            "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-            "update_interval": "1d",
-        }));
-        rule_sets.push(json!({
-            "tag": "rs-cn-ip",
-            "type": "remote",
-            "format": "binary",
-            "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-            "update_interval": "1d",
-        }));
-        rules.push(json!({ "rule_set": ["rs-cn", "rs-cn-ip"], "action": "direct" }));
-    }
-    if r.bypass_ru {
-        // SagerNet/sing-geosite does not publish a `geosite-ru.srs` —
-        // v2fly/domain-list-community has no `ru` category. We only
-        // bypass Russian IPs; Russian domains fall through to the
-        // proxy selector (acceptable trade-off — most Russian traffic
-        // is geo-targeted by IP anyway).
-        rule_sets.push(json!({
-            "tag": "rs-ru",
-            "type": "remote",
-            "format": "binary",
-            "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs",
-            "update_interval": "1d",
-        }));
-        rules.push(json!({ "rule_set": "rs-ru", "action": "direct" }));
-    }
-    if r.block_ads {
-        rule_sets.push(json!({
-            "tag": "rs-ads",
-            "type": "remote",
-            "format": "binary",
-            "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
-            "update_interval": "1d",
-        }));
-        rules.push(json!({ "rule_set": "rs-ads", "action": "reject" }));
-    }
+    let rule_sets: Vec<Value> = r
+        .rule_sets
+        .iter()
+        .filter(|rs| is_rule_set_enabled(rs))
+        .cloned()
+        .collect();
 
     let mut m = Map::new();
     m.insert("rules".into(), Value::Array(rules));
@@ -435,15 +395,76 @@ fn build_route(settings: &GeneratorSettings) -> Value {
         );
     }
     m.insert("final".into(), Value::String(r.final_outbound.clone()));
-    m.insert("auto_detect_interface".into(), Value::Bool(true));
-    // sing-box 1.13: every outbound (or the route) must declare a
-    // domain_resolver, otherwise resolving the proxy server hostname
-    // warns. We default to the local plain-UDP server.
+    m.insert(
+        "auto_detect_interface".into(),
+        Value::Bool(r.auto_detect_interface),
+    );
     m.insert(
         "default_domain_resolver".into(),
-        Value::String("local".into()),
+        Value::String(r.default_domain_resolver.clone()),
     );
     Value::Object(m)
+}
+
+/// CustomRule on the wire is `{"enabled": true, "matchers": {...},
+/// "action": "route|reject|...", "invert": false, ...}`. Treat the whole
+/// thing as opaque JSON and only check `enabled`.
+fn is_rule_enabled(rule: &Value) -> bool {
+    rule.get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+fn is_rule_set_enabled(rs: &Value) -> bool {
+    rs.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true)
+}
+
+/// Recursively strip `null` values and empty arrays/objects from a JSON
+/// rule. Empty matchers would fail `sing-box check` (every rule needs
+/// at least one matcher).
+fn strip_empty_fields(v: &Value) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, val) in map {
+                if k == "enabled" {
+                    // UI-only, never emitted to sing-box.
+                    continue;
+                }
+                let cleaned = strip_empty_fields(val);
+                match &cleaned {
+                    Value::Null => continue,
+                    Value::Array(a) if a.is_empty() => continue,
+                    Value::Object(o) if o.is_empty() => continue,
+                    _ => {
+                        out.insert(k.clone(), cleaned);
+                    }
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(arr) => {
+            Value::Array(arr.iter().map(strip_empty_fields).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// A rule is "meaningful" if it has at least one matcher field, or
+/// if its action is one that doesn't need a matcher (rare in sing-box —
+/// most actions require a matcher).
+fn has_meaningful_matchers(rule: &Value) -> bool {
+    let Some(obj) = rule.as_object() else {
+        return false;
+    };
+    // Any non-action / non-outbound / non-invert key counts as a matcher.
+    for (k, _) in obj {
+        if k == "action" || k == "outbound" || k == "invert" {
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 fn build_dns(settings: &GeneratorSettings) -> Value {
@@ -632,16 +653,16 @@ mod tests {
 
     #[test]
     fn routing_includes_ipv6_reject_and_lan_bypass() {
-        let s = GeneratorSettings::default();
-        let rules = s
-            .routing
-            .bypass_lan;
-        assert!(rules, "LAN bypass should default to true");
-        let cfg = Config::build(&fixture_outbounds(), &s);
+        // Routing 2.0 default: hard-coded DNS-bypass + sniff + empty
+        // user rules. Verify those two system rules are present.
+        let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
         let rules = cfg["route"]["rules"].as_array().unwrap();
-        // expect at least: ipv6 reject + LAN cidr direct
-        assert!(rules.iter().any(|r| r.get("ip_version").is_some()));
-        assert!(rules.iter().any(|r| r.get("ip_cidr").is_some()));
+        // DNS bypass (hard-coded)
+        assert!(rules
+            .iter()
+            .any(|r| r.get("network") == Some(&json!("dns"))));
+        // Sniff action (since sniff=true by default)
+        assert!(rules.iter().any(|r| r.get("action") == Some(&json!("sniff"))));
     }
 
     #[test]
@@ -710,10 +731,24 @@ mod tests {
 
     #[test]
     fn ads_block_emits_remote_ruleset_and_rule() {
+        // User enables `geosite-ads` rule-set + a rule that rejects it.
+        // The generator should emit both the rule and the rule-set
+        // entry (SagerNet/sing-geosite is the canonical source for
+        // sing-box 1.14+ .srs rule-sets).
         let s = routing(
             GeneratorSettings::default(),
             RoutingOptions {
-                block_ads: true,
+                rules: vec![json!({
+                    "rule_set": "geosite-ads",
+                    "action": "reject"
+                })],
+                rule_sets: vec![json!({
+                    "tag": "geosite-ads",
+                    "type": "remote",
+                    "format": "binary",
+                    "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
+                    "update_interval": "1d"
+                })],
                 ..RoutingOptions::default()
             },
         );
@@ -722,12 +757,11 @@ mod tests {
         let rss = rule_sets(&cfg);
         // The matching rule references the rule-set by tag.
         assert!(rs.iter().any(|r| {
-            r["rule_set"] == "rs-ads" && r["action"] == "reject"
+            r["rule_set"] == "geosite-ads" && r["action"] == "reject"
         }));
-        // And the rule-set entry is a remote `.srs` download from
-        // SagerNet/sing-geosite (canonical sing-box 1.14+ source).
+        // And the rule-set entry is a remote `.srs` download.
         assert_eq!(rss.len(), 1);
-        assert_eq!(rss[0]["tag"], "rs-ads");
+        assert_eq!(rss[0]["tag"], "geosite-ads");
         assert_eq!(rss[0]["type"], "remote");
         assert_eq!(rss[0]["format"], "binary");
         assert!(rss[0]["url"]
@@ -748,7 +782,27 @@ mod tests {
         let s = routing(
             GeneratorSettings::default(),
             RoutingOptions {
-                bypass_cn: true,
+                rules: vec![json!({
+                    "rule_set": ["geosite-cn", "geoip-cn"],
+                    "action": "route",
+                    "outbound": "direct"
+                })],
+                rule_sets: vec![
+                    json!({
+                        "tag": "geosite-cn",
+                        "type": "remote",
+                        "format": "binary",
+                        "url": "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
+                        "update_interval": "1d"
+                    }),
+                    json!({
+                        "tag": "geoip-cn",
+                        "type": "remote",
+                        "format": "binary",
+                        "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
+                        "update_interval": "1d"
+                    }),
+                ],
                 ..RoutingOptions::default()
             },
         );
@@ -756,19 +810,20 @@ mod tests {
         let rs = rules(&cfg);
         let rss = rule_sets(&cfg);
         assert!(rs.iter().any(|r| {
-            r["rule_set"] == json!(["rs-cn", "rs-cn-ip"])
-                && r["action"] == "direct"
+            r["rule_set"] == json!(["geosite-cn", "geoip-cn"])
+                && r["action"] == "route"
+                && r["outbound"] == "direct"
         }));
         assert_eq!(rss.len(), 2);
         let tags: Vec<&str> = rss
             .iter()
             .map(|r| r["tag"].as_str().unwrap())
             .collect();
-        assert!(tags.contains(&"rs-cn"));
-        assert!(tags.contains(&"rs-cn-ip"));
-        let cn = rss.iter().find(|r| r["tag"] == "rs-cn").unwrap();
+        assert!(tags.contains(&"geosite-cn"));
+        assert!(tags.contains(&"geoip-cn"));
+        let cn = rss.iter().find(|r| r["tag"] == "geosite-cn").unwrap();
         assert!(cn["url"].as_str().unwrap().ends_with("geosite-cn.srs"));
-        let cn_ip = rss.iter().find(|r| r["tag"] == "rs-cn-ip").unwrap();
+        let cn_ip = rss.iter().find(|r| r["tag"] == "geoip-cn").unwrap();
         assert!(cn_ip["url"].as_str().unwrap().ends_with("geoip-cn.srs"));
     }
 
@@ -777,7 +832,18 @@ mod tests {
         let s = routing(
             GeneratorSettings::default(),
             RoutingOptions {
-                bypass_ru: true,
+                rules: vec![json!({
+                    "rule_set": "geoip-ru",
+                    "action": "route",
+                    "outbound": "direct"
+                })],
+                rule_sets: vec![json!({
+                    "tag": "geoip-ru",
+                    "type": "remote",
+                    "format": "binary",
+                    "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ru.srs",
+                    "update_interval": "1d"
+                })],
                 ..RoutingOptions::default()
             },
         );
@@ -785,10 +851,10 @@ mod tests {
         let rs = rules(&cfg);
         let rss = rule_sets(&cfg);
         assert!(rs.iter().any(|r| {
-            r["rule_set"] == "rs-ru" && r["action"] == "direct"
+            r["rule_set"] == "geoip-ru" && r["action"] == "route"
         }));
         assert_eq!(rss.len(), 1);
-        assert_eq!(rss[0]["tag"], "rs-ru");
+        assert_eq!(rss[0]["tag"], "geoip-ru");
         assert!(rss[0]["url"].as_str().unwrap().ends_with("geoip-ru.srs"));
     }
 
@@ -797,7 +863,11 @@ mod tests {
         let s = routing(
             GeneratorSettings::default(),
             RoutingOptions {
-                block_quic: true,
+                rules: vec![json!({
+                    "port_range": ["443:443"],
+                    "network": "udp",
+                    "action": "reject"
+                })],
                 ..RoutingOptions::default()
             },
         );
@@ -808,6 +878,45 @@ mod tests {
                 && r["network"] == "udp"
                 && r["action"] == "reject"
         }));
+    }
+
+    #[test]
+    fn disabled_rules_are_skipped() {
+        // `enabled: false` on a rule means the generator must not
+        // emit it. Same for disabled rule-sets.
+        let s = routing(
+            GeneratorSettings::default(),
+            RoutingOptions {
+                rules: vec![
+                    json!({
+                        "enabled": false,
+                        "ip_version": 6,
+                        "action": "reject"
+                    }),
+                    json!({
+                        "ip_version": 6,
+                        "action": "reject"
+                    }),
+                ],
+                rule_sets: vec![
+                    json!({
+                        "tag": "geosite-ads",
+                        "type": "remote",
+                        "format": "binary",
+                        "url": "https://example/ads.srs",
+                        "enabled": false
+                    }),
+                ],
+                ..RoutingOptions::default()
+            },
+        );
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let rs = rules(&cfg);
+        let rss = rule_sets(&cfg);
+        // Only the enabled IPv6 reject survives.
+        assert_eq!(rs.iter().filter(|r| r.get("ip_version").is_some()).count(), 1);
+        // Rule-set is disabled → not emitted.
+        assert!(rss.is_empty(), "disabled rule-sets should not be emitted");
     }
 
     #[test]
@@ -839,7 +948,12 @@ mod tests {
         let s = routing(
             GeneratorSettings::default(),
             RoutingOptions {
-                block_ads: true,
+                rule_sets: vec![json!({
+                    "tag": "geosite-ads",
+                    "type": "remote",
+                    "format": "binary",
+                    "url": "https://example/ads.srs"
+                })],
                 ..RoutingOptions::default()
             },
         );

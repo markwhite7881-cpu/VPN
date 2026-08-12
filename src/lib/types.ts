@@ -162,7 +162,118 @@ export interface ParsedInput {
 // --- 
 export type TunnelMode = "tun" | "system_proxy" | "both" | "none";
 
+/**
+ * Routing 2.0 — flat per-rule + rule-set list.
+ *
+ * Replaces the old `RoutingOptions` of 7 boolean flags. Existing
+ * v0.1.0 settings are migrated silently in `App.tsx#loadSettings`.
+ *
+ * Shape mirrors sing-box 1.14+ config (`route.rules[]`, `route.rule_set[]`)
+ * with a couple of UI-only fields on `CustomRule`:
+ *   - `id` — stable React key
+ *   - `label` — human-friendly name shown in the list
+ *   - `enabled` — UI-only toggle; excluded rules are filtered out before
+ *     generating config, not serialized as `invert: true`
+ */
+
+/** Action attached to a rule. Mirrors sing-box rule_action. */
+export type RuleAction =
+  | { kind: "route"; outbound: string }
+  | { kind: "reject" }
+  | { kind: "hijack-dns" }
+  | { kind: "sniff"; sniffer?: string[]; timeout?: string }
+  | { kind: "resolve"; server?: string; strategy?: string };
+
+/** All matchers supported in this build (sing-box 1.14+). */
+export interface RuleMatchers {
+  // network / inbound
+  inbound?: string[];
+  ip_version?: 4 | 6;
+  network?: ("tcp" | "udp" | "icmp")[];
+  auth_user?: string[];
+  // domain
+  domain?: string[];
+  domain_suffix?: string[];
+  domain_keyword?: string[];
+  domain_regex?: string[];
+  // ip
+  ip_cidr?: string[];
+  source_ip_cidr?: string[];
+  ip_is_private?: boolean;
+  source_ip_is_private?: boolean;
+  // port
+  port?: number[];
+  port_range?: string[];
+  source_port?: number[];
+  source_port_range?: string[];
+  // process (Linux/Win/Mac)
+  process_name?: string[];
+  process_path?: string[];
+  process_path_regex?: string[];
+  // sniff
+  protocol?: string[];
+  client?: string[];
+  // reference
+  rule_set?: string[];
+  rule_set_ip_cidr_match_source?: boolean;
+}
+
+/** One user-visible rule in the routing list. */
+export interface CustomRule {
+  /** Stable id, used as React key. */
+  id: string;
+  /** Human label, e.g. "Telegram" or "Work split-tunnel". */
+  label?: string;
+  /** UI-only — disabled rules are skipped at config-generation time. */
+  enabled: boolean;
+  matchers: RuleMatchers;
+  /**
+   * sing-box `invert` flag — match everything *except* these
+   * conditions. Lives on the rule (not the matchers) per sing-box 1.14+.
+   */
+  invert?: boolean;
+  action: RuleAction;
+}
+
+/** A reference to a sing-box rule-set. */
+export interface CustomRuleSet {
+  /** Unique tag referenced from `RuleMatchers.rule_set`. */
+  tag: string;
+  type: "remote" | "local" | "inline";
+  format?: "source" | "binary";
+  url?: string;
+  path?: string;
+  /** Inline rules (only when type === "inline"). */
+  rules?: RuleMatchers[];
+  /** Update interval, e.g. "1d". Defaults to "1d" for remote. */
+  update_interval?: string;
+  /** UI-only. Disabled rule-sets are omitted at config-generation time. */
+  enabled: boolean;
+}
+
+/**
+ * Routing 2.0 — full routing config.
+ *
+ * Note: this is intentionally a *replacement* for the v0.1.0 boolean
+ * shape. See `migrateRoutingV1ToV2` in `App.tsx` for the conversion.
+ */
 export interface RoutingOptions {
+  /** Ordered rule list (first match wins). */
+  rules: CustomRule[];
+  /** External rule-sets (Loyalsoldier / meta-rules-dat / custom URL). */
+  rule_sets: CustomRuleSet[];
+  /** Always-on sniff action pushed at the top of `route.rules`. */
+  sniff: boolean;
+  /** `route.final` outbound tag. */
+  final_outbound: string;
+  /** `route.auto_detect_interface` — prevents TUN routing loop on Win/Mac/Linux. */
+  auto_detect_interface: boolean;
+  /** `route.default_domain_resolver` tag (usually "local"). */
+  default_domain_resolver: string;
+}
+
+/** v0.1.0 routing shape — only used by the silent migration. */
+export interface RoutingOptionsV1 {
   bypass_lan: boolean;
   reject_ipv6: boolean;
   block_ads: boolean;
