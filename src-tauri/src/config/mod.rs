@@ -368,8 +368,15 @@ fn build_route(settings: &GeneratorSettings) -> Value {
         if !is_rule_enabled(rule) {
             continue;
         }
+        // Normalize the `action` field. The UI stores it as an object
+        // ({kind: "route", outbound: "proxy"}) for ergonomic editing;
+        // sing-box 1.14+ wants it as a STRING with the outbound lifted
+        // to a top-level field. Without this, sing-box check fails
+        // with: "json: cannot unmarshal object into Go struct field
+        // _RuleAction.action of type string".
+        let normalized = normalize_rule_action(rule);
         // Drop empty / no-op rules (would fail `sing-box check`).
-        let cleaned = strip_empty_fields(rule);
+        let cleaned = strip_empty_fields(&normalized);
         if has_meaningful_matchers(&cleaned) {
             rules.push(cleaned);
         }
@@ -465,6 +472,67 @@ fn has_meaningful_matchers(rule: &Value) -> bool {
         return true;
     }
     false
+}
+
+/// Normalize a rule's `action` field from the UI's object form to
+/// sing-box's string form.
+///
+/// UI shape (ergonomic for editing):
+/// ```json
+/// { "matchers": {...}, "action": {"kind": "route", "outbound": "proxy"} }
+/// ```
+///
+/// sing-box shape:
+/// ```json
+/// { "matchers": {...}, "action": "route", "outbound": "proxy" }
+/// ```
+///
+/// For actions that carry no outbound (`reject`, `hijack-dns`, `sniff`,
+/// `resolve`) the `kind` is just lifted to a string — the
+/// `outbound` field is dropped.
+///
+/// If `action` is already a string (rules typed by hand, or imported
+/// rule-sets) the rule passes through unchanged.
+fn normalize_rule_action(rule: &Value) -> Value {
+    let Some(obj) = rule.as_object() else {
+        return rule.clone();
+    };
+    let mut out = obj.clone();
+
+    // Pull a snapshot of the action value so the borrow of `out`
+    // ends before we start mutating it below.
+    let action_snapshot = out.get("action").cloned();
+    let action = match action_snapshot {
+        Some(a) => a,
+        None => return Value::Object(out),
+    };
+
+    if action.is_string() {
+        // Already in sing-box shape. Nothing to do.
+        return Value::Object(out);
+    }
+
+    let Some(action_obj) = action.as_object() else {
+        // Unknown shape — leave alone, let sing-box fail loudly.
+        return Value::Object(out);
+    };
+
+    let Some(kind) = action_obj.get("kind").and_then(|k| k.as_str()) else {
+        // No `kind` field — leave the original object in place so
+        // sing-box's own error message points at something useful.
+        return Value::Object(out);
+    };
+
+    // Replace the object with the string form.
+    out.insert("action".into(), Value::String(kind.to_string()));
+    // Lift the outbound to a top-level field (only meaningful for
+    // action: "route" — for the other kinds the field, if any, is
+    // ignored by sing-box, but we forward it anyway for forward-
+    // compatibility).
+    if let Some(outbound) = action_obj.get("outbound").and_then(|o| o.as_str()) {
+        out.insert("outbound".into(), Value::String(outbound.to_string()));
+    }
+    Value::Object(out)
 }
 
 fn build_dns(settings: &GeneratorSettings) -> Value {
@@ -972,5 +1040,117 @@ mod tests {
             cfg["route"].get("default_http_client").is_none(),
             "default_http_client should be absent when no rule-sets"
         );
+    }
+
+    #[test]
+    fn action_object_is_normalized_to_string_in_generated_route() {
+        // The UI stores rules with `action: {kind: "route", outbound: "X"}`
+        // (object form, ergonomic for editing). sing-box 1.14+ requires
+        // `action: "route"` as a STRING with `outbound` lifted to the
+        // top level. Without normalization, sing-box fails with:
+        //   "json: cannot unmarshal object into Go struct field
+        //    _RuleAction.action of type string"
+        let s = routing(
+            GeneratorSettings::default(),
+            RoutingOptions {
+                rules: vec![
+                    json!({
+                        "ip_cidr": ["10.0.0.0/8"],
+                        "action": {"kind": "route", "outbound": "direct"},
+                    }),
+                    json!({
+                        "process_name": ["Telegram.exe"],
+                        "action": {"kind": "route", "outbound": "proxy"},
+                    }),
+                    json!({
+                        "ip_version": 6,
+                        "action": {"kind": "reject"},
+                    }),
+                    json!({
+                        "network": "udp",
+                        "action": {"kind": "hijack-dns"},
+                    }),
+                ],
+                ..RoutingOptions::default()
+            },
+        );
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let rules = cfg["route"]["rules"]
+            .as_array()
+            .expect("route.rules is array");
+        // First two are the user rules; last two are the system ones
+        // (DNS bypass + sniff), so the user rules are at indices 0..2.
+        // Actually with `sniff: true` by default and a custom rule
+        // before it, the order is: dns-bypass, sniff, user-1, user-2,
+        // user-3, user-4. We assert on the user ones (indices 2..6).
+        let user_rules = &rules[2..];
+        // Rule 1: action: route with outbound
+        assert_eq!(user_rules[0]["action"], "route");
+        assert_eq!(user_rules[0]["outbound"], "direct");
+        assert_eq!(user_rules[0]["ip_cidr"][0], "10.0.0.0/8");
+        // Rule 2: process_name + route with outbound
+        assert_eq!(user_rules[1]["action"], "route");
+        assert_eq!(user_rules[1]["outbound"], "proxy");
+        assert_eq!(user_rules[1]["process_name"][0], "Telegram.exe");
+        // Rule 3: reject (no outbound)
+        assert_eq!(user_rules[2]["action"], "reject");
+        assert!(user_rules[2].get("outbound").is_none());
+        // Rule 4: hijack-dns (no outbound)
+        assert_eq!(user_rules[3]["action"], "hijack-dns");
+        assert!(user_rules[3].get("outbound").is_none());
+    }
+
+    #[test]
+    fn action_string_passes_through_unchanged() {
+        // Rules written by hand or imported from rule-sets may already
+        // use the sing-box string form. We must NOT corrupt those.
+        let s = routing(
+            GeneratorSettings::default(),
+            RoutingOptions {
+                rules: vec![json!({
+                    "ip_cidr": ["10.0.0.0/8"],
+                    "action": "route",
+                    "outbound": "direct",
+                })],
+                ..RoutingOptions::default()
+            },
+        );
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let rules = cfg["route"]["rules"].as_array().expect("array");
+        // The user rule is at index 2 (after dns-bypass + sniff).
+        assert_eq!(rules[2]["action"], "route");
+        assert_eq!(rules[2]["outbound"], "direct");
+    }
+
+    #[test]
+    fn route_object_rule_was_the_bug_user_just_hit() {
+        // Direct reproduction of the error the user reported in the
+        // chat: sing-box refused to start with
+        //   "route.rules[2].action: json: cannot unmarshal object
+        //    into Go struct field _RuleAction.action of type string"
+        // This is the UI form: action as an object. The migration
+        // from v1 produced rules like this. The fix (normalize) is
+        // what makes this test pass.
+        let s = routing(
+            GeneratorSettings::default(),
+            RoutingOptions {
+                rules: vec![json!({
+                    "domain_suffix": ["example.com"],
+                    "action": {"kind": "route", "outbound": "direct"},
+                })],
+                ..RoutingOptions::default()
+            },
+        );
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let user_rule = &cfg["route"]["rules"][2];
+        // Critical: action must be a STRING, not an object, otherwise
+        // sing-box will fail to decode.
+        assert!(
+            user_rule["action"].is_string(),
+            "action must be a string for sing-box, got: {}",
+            user_rule["action"]
+        );
+        assert_eq!(user_rule["action"], "route");
+        assert_eq!(user_rule["outbound"], "direct");
     }
 }
