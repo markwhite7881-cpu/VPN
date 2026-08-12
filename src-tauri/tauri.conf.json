@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Singbox Client",
+  "version": "0.1.0",
+  "identifier": "ru.classquiz.singbox",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Singbox Client",
+        "width": 1100,
+        "height": 720,
+        "minWidth": 880,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "backgroundColor": "#0f172a"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/sing-box"
+    ],
+    "category": "Utility",
+    "shortDescription": "Singbox VPN client",
+    "longDescription": "Cross-platform GUI VPN client built on top of sing-box core."
+  }
+}

@@ -1,0 +1,858 @@
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Home,
+  Link2,
+  Power,
+  Settings2,
+  ShieldCheck,
+  Terminal,
+} from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { Button } from "@/components/Button";
+import { Badge } from "@/components/Badge";
+import { StatusPill } from "@/components/StatusPill";
+import { Tabs, type TabDef } from "@/components/Tabs";
+import { HomeTab } from "@/components/HomeTab";
+import { ServersTab } from "@/components/ServersTab";
+import { LogsTab } from "@/components/LogsTab";
+import { ConfigTab } from "@/components/ConfigTab";
+import { TauriCommandError, api } from "@/lib/api";
+import { useSubscriptions } from "@/hooks/useSubscriptions";
+import { useGeoIp } from "@/hooks/useGeoIp";
+import { isSupported } from "@/lib/outbound";
+import { basename } from "@/lib/utils";
+import type {
+  BinaryInfo,
+  GeneratorSettings,
+  LogLine,
+  Outbound,
+  ParseFailure,
+  SingboxVersion,
+  Status,
+  StatusReport,
+} from "@/lib/types";
+
+// Detect whether we're running inside the Tauri shell.
+// When opened in a plain browser (e.g. `vite dev` preview) we fall
+// back to mock data so the UI is still demoable.
+const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+const TAB_KEYS = ["home", "servers", "config", "logs"] as const;
+type TabId = (typeof TAB_KEYS)[number];
+const DEFAULT_TAB: TabId = "home";
+
+function readStoredTab(): TabId {
+  try {
+    const v = window.localStorage.getItem("singbox.tab");
+    if (v && (TAB_KEYS as readonly string[]).includes(v)) {
+      return v as TabId;
+    }
+  } catch {
+    // localStorage may be unavailable in some sandboxes; fall through.
+  }
+  return DEFAULT_TAB;
+}
+
+const SETTINGS_KEY = "singbox-client.settings.v1";
+
+/** Default settings — kept in sync with the Rust side defaults. */
+const DEFAULT_SETTINGS: GeneratorSettings = {
+  tunnel_mode: "system_proxy",
+  routing: {
+    bypass_lan: true,
+    reject_ipv6: true,
+    block_quic: false,
+    block_ads: false,
+    bypass_cn: false,
+    bypass_ru: false,
+    final_outbound: "proxy",
+  },
+  clash_api: {
+    external_controller: "127.0.0.1:9090",
+    default_controller: "proxy",
+    secret: null,
+  },
+  tun_interface_name: null,
+  mixed_port: 2080,
+  local_dns: "223.5.5.5",
+  remote_dns: "https://dns.google/dns-query",
+  // null → `auto` urltest picks the fastest server.
+  // Set to a server tag the moment the user clicks a card in
+  // the picker, so the regenerated config boots pinned to it.
+  default_outbound: null,
+};
+
+function loadSettings(): GeneratorSettings {
+  if (typeof window === "undefined") return DEFAULT_SETTINGS;
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw);
+    // Shallow-merge so missing fields from older versions fall back
+    // to the default rather than producing an undefined crash.
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      routing: { ...DEFAULT_SETTINGS.routing, ...(parsed.routing ?? {}) },
+      clash_api: { ...DEFAULT_SETTINGS.clash_api, ...(parsed.clash_api ?? {}) },
+    };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+export default function App() {
+  const [binary, setBinary] = useState<BinaryInfo | null>(null);
+  const [version, setVersion] = useState<SingboxVersion | null>(null);
+  const [status, setStatus] = useState<StatusReport>({
+    status: "stopped" as Status,
+    pid: null,
+    uptime_secs: null,
+    last_exit_code: null,
+    last_error: null,
+  });
+  const [logs, setLogs] = useState<LogLine[]>([]);
+  const [configPath, setConfigPath] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>(readStoredTab);
+  // Tag of the outbound that the running `proxy` selector is
+  // currently routing through. Comes from `GET /proxies/proxy` on
+  // the clash API — refreshed alongside status in the poll loop.
+  // `null` while sing-box is stopped / unreachable.
+  const [activeOutbound, setActiveOutbound] = useState<string | null>(null);
+
+  // Parsed profiles — split into manual + subscription entries
+  // so subscription auto-refresh only replaces the slots owned
+  // by a particular subscription.
+  const [manualProfiles, setManualProfiles] = useState<Outbound[]>([]);
+  const [pendingLinks, setPendingLinks] = useState<string>("");
+  const [parseErrors, setParseErrors] = useState<ParseFailure[]>([]);
+  const [parsing, setParsing] = useState(false);
+  // Config-builder settings — lifted here so they survive tab
+  // switches and a process restart (persisted to localStorage below).
+  const [settings, setSettings] = useState<GeneratorSettings>(loadSettings);
+  // Index into `profiles` (manual + subscription) for the server the
+  // user has selected on the Home tab. -1 = "auto" (let urltest pick).
+  const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const pollTimerRef = useRef<number | null>(null);
+
+  // Persist the settings every time they change.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    } catch {
+      /* quota exceeded or storage disabled — ignore */
+    }
+  }, [settings]);
+
+  // Subscriptions.
+  const subs = useSubscriptions();
+
+  // Persist tab selection across sessions.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("singbox.tab", activeTab);
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [activeTab]);
+
+  // Flattened profiles = manual + each subscription's last result.
+  //
+  // We de-duplicate by `server:port` (the *endpoint*, not the display
+  // tag) because some subscription providers echo every link twice
+  // and a few even ship two different servers with the same display
+  // name. Without dedup, sing-box refuses to start with
+  // `duplicate outbound/endpoint tag: …` and the whole app goes dark.
+  // We also de-duplicate by tag in case the same link is added
+  // manually AND imported via subscription.
+  const profiles = useMemo<Outbound[]>(() => {
+    const raw: Outbound[] = [...manualProfiles];
+    for (const s of subs.subs) {
+      const r = subs.lastResult[s.id];
+      if (r) raw.push(...r.outbounds);
+    }
+    const seenEndpoint = new Set<string>();
+    const seenTag = new Set<string>();
+    const out: Outbound[] = [];
+    for (const p of raw) {
+      if (p.protocol === "unsupported") {
+        out.push(p);
+        continue;
+      }
+      const endpoint = `${p.server}:${p.port}`;
+      if (seenEndpoint.has(endpoint)) continue;
+      // The "tag" comes from the share-link's URL fragment, which
+      // sing-box requires to be globally unique. The provider we
+      // work with reuses names ("🇩🇪 Германия" twice) and that
+      // breaks sing-box's `decode config` step. Disambiguate by
+      // appending " @host:port" to repeated tags so each outbound
+      // has a unique tag, while the original name is still visible
+      // in the UI (we never use the disambiguated tag for display).
+      if (seenTag.has(p.tag)) {
+        out.push({ ...p, tag: `${p.tag} @${endpoint}` });
+      } else {
+        out.push(p);
+        seenTag.add(p.tag);
+      }
+      seenEndpoint.add(endpoint);
+    }
+    return out;
+  }, [manualProfiles, subs.subs, subs.lastResult]);
+
+  // Online GeoIP fallback for servers the cheap heuristic in
+  // `flagForProfile` couldn't resolve (no emoji, no Russian/English
+  // name, no TLD). Hits ip-api.com once per uncached IP, then keeps
+  // the result in localStorage forever. Lives after `profiles` is
+  // declared because it takes the profile list as input.
+  const geoip = useGeoIp(profiles);
+
+  const refresh = useCallback(async () => {
+    if (!inTauri) {
+      // Browser preview — show mock state.
+      setBinary({
+        path: "C:\\Users\\Алексей\\.minimax-agent\\projects\\singbox-client\\src-tauri\\binaries\\sing-box-x86_64-pc-windows-msvc.exe",
+        exists: true,
+        size_bytes: 51_732_480,
+      });
+      setVersion({
+        version: "1.14.0-lx.24",
+        environment: "go1.26.5 windows/amd64",
+        revision: "42e693ce1cbb2f76d611f17fae137c40deaf85fc",
+        raw: "sing-box version 1.14.0-lx.24\nEnvironment: go1.26.5 windows/amd64",
+      });
+      setStatus({
+        status: "stopped",
+        pid: null,
+        uptime_secs: null,
+        last_exit_code: null,
+        last_error: null,
+      });
+      setLogs([
+        {
+          ts: new Date(Date.now() - 60_000).toISOString(),
+          stream: "system",
+          line: "preview mode — open this in the Tauri shell to control sing-box",
+        },
+        {
+          ts: new Date(Date.now() - 30_000).toISOString(),
+          stream: "system",
+          line: "backend ready: process manager wired, default config generator in place",
+        },
+      ]);
+      setManualProfiles(demoProfiles());
+      setError(null);
+      return;
+    }
+    try {
+      // Only poll things that actually change: status + logs.
+      // `getBinaryInfo` / `getSingboxVersion` are static (the binary
+      // never changes under our feet) so we fetch them exactly once
+      // in the mount effect below. Re-fetching them every tick used
+      // to spawn `sing-box version` every 1.8 s and flash a CMD
+      // window — even after we added CREATE_NO_WINDOW it was still
+      // a wasted process; pulling them out of the hot loop removes
+      // the flash entirely.
+      const [st, log] = await Promise.all([
+        api.getStatus(),
+        api.getLogs(500),
+      ]);
+      setStatus(st);
+      setLogs(log);
+      // While sing-box is up, also pull the currently-active
+      // outbound from the clash API. This is what we show as
+      // "Active: 🇳🇱 Нидерланды" in the hero — the source of
+      // truth for which server the *running* selector is
+      // actually using, not just the one the user picked (which
+      // may differ if they switched to "Auto" and `urltest`
+      // already migrated to a faster server).
+      //
+      // We serialise behind `getStatus` so the first poll after
+      // a restart doesn't try to hit the clash API while the
+      // old process is still dying. `listProxies` is allowed to
+      // fail silently (the API may be unreachable for a tick
+      // during a state transition), in which case we keep the
+      // previous `activeOutbound` rather than blanking it out.
+      if (st.status === "running") {
+        try {
+          const p = await api.listProxies();
+          const now = p.proxies?.["proxy"]?.now ?? null;
+          setActiveOutbound(now);
+        } catch {
+          // best effort
+        }
+      } else {
+        // Stopped / starting / stopping: clear so the hero
+        // doesn't keep showing a stale tag. React skips the
+        // re-render if the value is already null.
+        setActiveOutbound(null);
+      }
+      setError(null);
+    } catch (e) {
+      setError(humanError(e));
+    }
+  }, []);
+
+  // One-time static fetch: binary path/version. The version literally
+  // cannot change while the app is running, so it doesn't belong in
+  // the 1.8 s status poll.
+  useEffect(() => {
+    if (!inTauri) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [bin, ver] = await Promise.all([
+          api.getBinaryInfo(),
+          api.getSingboxVersion().catch(() => null),
+        ]);
+        if (cancelled) return;
+        setBinary(bin);
+        if (ver) setVersion(ver);
+      } catch (e) {
+        if (!cancelled) setError(humanError(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // Polling loop. Faster when starting/stopping, slower when steady.
+  useEffect(() => {
+    const interval =
+      status.status === "starting" || status.status === "stopping" ? 700 : 1800;
+    pollTimerRef.current = window.setInterval(() => {
+      refresh();
+    }, interval);
+    return () => {
+      if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+    };
+  }, [status.status, refresh]);
+
+  const onStart = useCallback(async () => {
+    if (!inTauri) {
+      setError("Preview mode — start the Tauri shell to actually run sing-box.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      // 1. Always generate a fresh config from the imported profiles
+      //    + current settings. The config we start with MUST include
+      //    the VPN servers, otherwise the proxy accepts connections
+      //    but routes them all to `direct`.
+      //
+      //    `settings.default_outbound` is baked into the proxy
+      //    selector's `default`, so the very first request after
+      //    sing-box boots goes straight through the picked server.
+      //    No more `auto` urltest flash for the first packet.
+      const value = await api.generateConfig(profiles, settings);
+      const path = await api.saveConfigToPath(value, undefined);
+      setConfigPath(path);
+
+      // 2. Start sing-box FIRST. If it crashes, `finalize_exit` in
+      //    the ProcessManager clears the system proxy on our behalf
+      //    (otherwise Windows keeps sending traffic to a dead
+      //    listener and the user loses all internet until they
+      //    manually flip the proxy back off).
+      const controllerUrl = `http://${settings.clash_api.external_controller}`;
+      const next = await api.startSingboxWithConfig(path, controllerUrl);
+      setStatus(next);
+
+      // 3. Only now that sing-box is alive do we tell Windows to
+      //    route traffic through it. If `applySystemProxy` fails,
+      //    sing-box is still running and the user can configure
+      //    the system proxy manually.
+      if (
+        settings.tunnel_mode === "system_proxy" ||
+        settings.tunnel_mode === "both"
+      ) {
+        const port = settings.mixed_port ?? 2080;
+        try {
+          await api.applySystemProxy("127.0.0.1", port);
+        } catch (e) {
+          setError(
+            `sing-box is running, but the system proxy couldn't be ` +
+              `enabled automatically (${humanError(e)}). Set it ` +
+              "manually in Settings → Network → Proxy.",
+          );
+        }
+      }
+
+      await refresh();
+      setActiveTab("home");
+    } catch (e) {
+      setError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [profiles, settings, refresh]);
+
+  // Latest onStart, for handlers that need to call it after they've
+  // already scheduled a state update (so the new settings object
+  // is visible to onStart when it runs).
+  const onStartRef = useRef(onStart);
+  useEffect(() => {
+    onStartRef.current = onStart;
+  }, [onStart]);
+
+  const onStop = useCallback(async () => {
+    if (!inTauri) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // 1. Clear the system proxy FIRST. sing-box is about to die and
+      //    Windows DNS / WebView would otherwise sit without a working
+      //    resolver for the few seconds it takes the child to exit.
+      try {
+        await api.clearSystemProxy();
+      } catch {
+        // best-effort
+      }
+      // 2. Now ask sing-box to exit. (If we did it the other way
+      //    around, traffic would already be failing for ~2s before
+      //    Windows noticed it should bypass the proxy again.)
+      const next = await api.stop();
+      setStatus(next);
+      await refresh();
+    } catch (e) {
+      setError(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+
+  const onPickConfig = useCallback(async () => {
+    if (!inTauri) {
+      setError("File picker is only available inside the Tauri shell.");
+      return;
+    }
+    try {
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: "sing-box config", extensions: ["json"] },
+          { name: "All", extensions: ["*"] },
+        ],
+      });
+      if (typeof picked === "string") {
+        setConfigPath(picked);
+      }
+    } catch (e) {
+      setError(humanError(e));
+    }
+  }, []);
+
+  const onUseDefault = useCallback(() => {
+    void (async () => {
+      if (!inTauri) {
+        setError("Default config writer is only available inside the Tauri shell.");
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const path = await api.writeDefaultConfig();
+        setConfigPath(path);
+        await api.checkConfig(path);
+      } catch (e) {
+        setError(humanError(e));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, []);
+
+  // Link / subscription parser (auto-detect).
+  const onParseLinks = useCallback(() => {
+    void (async () => {
+      const text = pendingLinks.trim();
+      if (!text) return;
+      setParsing(true);
+      setError(null);
+      setParseErrors([]);
+      try {
+        if (!inTauri) {
+          // Browser preview: tiny client-side mock — treat every
+          // non-empty line as a vless:// link.
+          const lines = text
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => l && !l.startsWith("#"));
+          if (lines.length === 0) {
+            setError("No entries found in input.");
+            return;
+          }
+          const linkLines = lines.filter((l) => !/^https?:\/\//i.test(l));
+          const urlLines = lines.filter((l) => /^https?:\/\//i.test(l));
+          if (linkLines.length > 0) {
+            const mocks: Outbound[] = linkLines.slice(0, 3).map((l, i) => ({
+              protocol: "vless",
+              tag: `preview-node-${i + 1}`,
+              server: `mock-${i + 1}.example.com`,
+              port: 443,
+              uuid: "00000000-0000-0000-0000-000000000000",
+              flow: "xtls-rprx-vision",
+              transport: { kind: "tcp" },
+              tls: {
+                enabled: true,
+                server_name: `mock-${i + 1}.example.com`,
+                alpn: ["h2", "http/1.1"],
+                reality: { public_key: "PREVIEW", short_id: "abcd" },
+                allow_insecure: false,
+              },
+            }));
+            setManualProfiles((prev) => [...mocks, ...prev]);
+          }
+          for (const u of urlLines) {
+            subs.add({ url: u });
+          }
+          setPendingLinks("");
+          return;
+        }
+        const result = await api.parseInput(text);
+        setManualProfiles((prev) => [...result.outbounds, ...prev]);
+        setParseErrors(result.failures);
+        // Promote detected subscription URLs.
+        for (const u of result.subscriptions) {
+          try {
+            subs.add({ url: u });
+          } catch {
+            // ignore malformed URL
+          }
+        }
+        if (
+          result.outbounds.length > 0 ||
+          result.subscriptions.length > 0
+        ) {
+          setPendingLinks("");
+        }
+      } catch (e) {
+        setError(humanError(e));
+      } finally {
+        setParsing(false);
+      }
+    })();
+  }, [pendingLinks, inTauri, subs]);
+
+  const onSelectProfile = useCallback(
+    async (index: number) => {
+      // index === -1 means "Auto (best latency)" — drop the pin,
+      // let the `auto` urltest decide.
+      const isAuto = index === -1;
+      // Resolve the new settings value up front, in two distinct
+      // branches, so TypeScript's narrowing is happy in the async
+      // closure below and the path is obvious for a human reader.
+      let pickedTag: string | null;
+      if (isAuto) {
+        pickedTag = null;
+      } else {
+        const profile = profiles[index];
+        if (!profile || !isSupported(profile)) return;
+        pickedTag = profile.tag;
+      }
+      setSelectedIndex(index);
+      setSettings((prev) => ({
+        ...prev,
+        // null → urltest, anything else → pinned default in the
+        // generated config so the first request after the next
+        // Connect goes straight through the picked server.
+        default_outbound: pickedTag,
+      }));
+      // If sing-box is already up, take it down cleanly, regenerate
+      // the config with the new `default_outbound` baked into the
+      // selector's `default`, then bring it back up. This is a
+      // 1-2 s gap, but it's the only path that is 100% reliable:
+      // `PUT /proxies/proxy` for hot-swapping the selector
+      // member is racy on some sing-box versions and the user
+      // has reported it sometimes leaves the selector on the old
+      // server even though the API returns 204. A full
+      // disconnect → regen → reconnect is boring, but boring is
+      // exactly what you want from a VPN.
+      if (status.status === "running") {
+        setBusy(true);
+        setError(null);
+        try {
+          try {
+            await api.clearSystemProxy();
+          } catch {
+            // best effort; we re-apply right after
+          }
+          const next = await api.stop();
+          setStatus(next);
+          // Yield so React commits the new `default_outbound`
+          // before onStart reads it.
+          await Promise.resolve();
+          await onStartRef.current();
+        } catch (e) {
+          setError(humanError(e));
+        } finally {
+          setBusy(false);
+        }
+      }
+    },
+    [profiles, status.status],
+  );
+
+  const onRemoveProfile = useCallback((idx: number) => {
+    setManualProfiles((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  const onClearProfiles = useCallback(() => {
+    setManualProfiles([]);
+    setParseErrors([]);
+  }, []);
+
+  const isRunning = status.status === "running";
+
+  // Tabs are assembled here so they can close over the live state
+  // (profiles, status, error, …) without prop-drilling. Order matters.
+  const tabs: TabDef[] = useMemo(
+    () => [
+      {
+        id: "home",
+        label: "Home",
+        icon: Home,
+        content: (
+          <HomeTab
+            status={status}
+            statusLabel={status.status}
+            busy={busy}
+            error={error}
+            // The user shouldn't have to know about the config file
+            // at all. `onStart` regenerates it from the current
+            // profiles + settings on every Connect, so the only
+            // real prerequisite is "have at least one server". The
+            // tunnel-mode check (admin / Wintun) is handled inside
+            // sing-box itself — we just try, and surface any error
+            // message in the red banner below the hero.
+            canStart={profiles.length > 0}
+            configName={configPath ? basename(configPath) : null}
+            profiles={profiles}
+            selectedIndex={selectedIndex}
+            activeOutbound={activeOutbound}
+            geoipByIp={geoip.byIp}
+            onSelect={onSelectProfile}
+            onConnect={onStart}
+            onDisconnect={onStop}
+          />
+        ),
+      },
+      {
+        id: "servers",
+        label: "Servers",
+        icon: Link2,
+        badge: profiles.length > 0 ? profiles.length : undefined,
+        content: (
+          <ServersTab
+            profiles={profiles}
+            parseErrors={parseErrors}
+            parseError={error}
+            pendingLinks={pendingLinks}
+            onPendingLinksChange={setPendingLinks}
+            onParse={onParseLinks}
+            onRemove={onRemoveProfile}
+            onClearAll={onClearProfiles}
+            parsing={parsing}
+            subs={subs.subs}
+            geoipByIp={geoip.byIp}
+            subFetching={subs.fetching}
+            onAddSub={subs.add}
+            onRemoveSub={subs.remove}
+            onRefreshSub={subs.refreshOne}
+            onRefreshAllSubs={subs.refreshAll}
+            onSetSubInterval={subs.setIntervalFor}
+          />
+        ),
+      },
+      {
+        id: "config",
+        label: "Config",
+        icon: Settings2,
+        content: (
+          <ConfigTab
+            configPath={configPath}
+            binary={binary}
+            version={version}
+            statusLabel={status.status}
+            profiles={profiles}
+            settings={settings}
+            onSettingsChange={setSettings}
+            onResetSettings={() => setSettings(DEFAULT_SETTINGS)}
+            onPickConfig={onPickConfig}
+            onUseDefault={onUseDefault}
+            onStart={(p) => {
+              setConfigPath(p);
+              void onStart();
+            }}
+            onConfigPath={(p) => {
+              if (p) setConfigPath(p);
+            }}
+          />
+        ),
+      },
+      {
+        id: "logs",
+        label: "Logs",
+        icon: Terminal,
+        content: <LogsTab logs={logs} onClear={() => setLogs([])} />,
+      },
+    ],
+    [
+      status,
+      busy,
+      error,
+      configPath,
+      manualProfiles,
+      profiles,
+      selectedIndex,
+      onStart,
+      onStop,
+      onSelectProfile,
+      pendingLinks,
+      parseErrors,
+      parsing,
+      onParseLinks,
+      onRemoveProfile,
+      onClearProfiles,
+      subs.subs,
+      subs.fetching,
+      subs.add,
+      subs.remove,
+      subs.refreshOne,
+      subs.refreshAll,
+      subs.setIntervalFor,
+      binary,
+      version,
+      onPickConfig,
+      onUseDefault,
+      logs,
+    ],
+  );
+
+  return (
+    <div className="relative flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      {/* Decorative background grid (matches classquiz) */}
+      <div className="pointer-events-none absolute inset-0 bg-grid opacity-30" />
+
+      {/* Header — single slim row, brand + status + controls. */}
+      <header className="relative z-10 flex shrink-0 items-center justify-between border-b border-border bg-card/40 px-6 py-2.5 backdrop-blur">
+        <div className="flex items-center gap-3">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
+            <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-sm font-semibold tracking-tight">
+                Singbox Client
+              </h1>
+              <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                v0.1
+              </Badge>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              {version
+                ? `sing-box ${version.version}`
+                : binary?.exists
+                  ? basename(binary.path)
+                  : "scanning for binary…"}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <StatusPill
+            status={status.status}
+            disabled={busy}
+            onClick={() => {
+              if (busy) return;
+              if (status.status === "running") {
+                void onStop();
+              } else if (
+                status.status === "stopped" ||
+                status.status === "crashed"
+              ) {
+                void onStart();
+              }
+            }}
+          />
+        </div>
+      </header>
+
+      {/* Body — fills the rest of the viewport with the active tab. */}
+      <main className="relative z-10 flex min-h-0 flex-1 flex-col">
+        <Tabs
+          tabs={tabs}
+          active={activeTab}
+          onChange={(id) => setActiveTab(id as TabId)}
+        />
+      </main>
+    </div>
+  );
+}
+
+function humanError(e: unknown): string {
+  if (e instanceof TauriCommandError) {
+    return `${e.kind}: ${e.message}`;
+  }
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
+function demoProfiles(): Outbound[] {
+  return [
+    {
+      protocol: "vless",
+      tag: "🇩🇪 DE-Reality-1",
+      server: "de-1.example.com",
+      port: 443,
+      uuid: "b2a3d6c8-1111-2222-3333-444455556666",
+      flow: "xtls-rprx-vision",
+      transport: { kind: "grpc", service_name: "" },
+      tls: {
+        enabled: true,
+        server_name: "cdn.example.com",
+        alpn: ["h2", "http/1.1"],
+        fingerprint: "chrome",
+        reality: { public_key: "REAL_PUBLIC_KEY_HERE", short_id: "abcd" },
+        allow_insecure: false,
+      },
+    },
+    {
+      protocol: "hysteria2",
+      tag: "🇳🇱 NL-Hy2-Edge",
+      server: "nl-edge.example.org",
+      port: 443,
+      password: "demo-passphrase",
+      tls: {
+        enabled: true,
+        server_name: "nl-edge.example.org",
+        alpn: ["h3"],
+        allow_insecure: false,
+      },
+      obfs: { type: "salamander", password: "obfs-secret" },
+    },
+    {
+      protocol: "shadowsocks",
+      tag: "🇸🇬 SG-AES",
+      server: "sg.example.net",
+      port: 8388,
+      method: "chacha20-ietf-poly1305",
+      password: "shadowsocks-secret",
+    },
+    {
+      protocol: "trojan",
+      tag: "🇺🇸 US-Trojan",
+      server: "us.example.com",
+      port: 443,
+      password: "trojan-pass",
+      transport: { kind: "ws", path: "/trojan", headers: [["Host", "us.example.com"]] },
+      tls: { enabled: true, server_name: "us.example.com", alpn: [], allow_insecure: false },
+    },
+  ];
+}

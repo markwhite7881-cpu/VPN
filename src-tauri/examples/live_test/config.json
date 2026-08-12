@@ -1,0 +1,79 @@
+{
+  "log": { "level": "info", "timestamp": true },
+  "dns": {
+    "servers": [
+      { "type": "udp", "tag": "local", "server": "223.5.5.5" },
+      {
+        "type": "https",
+        "tag": "remote",
+        "server": "dns.google",
+        "domain_resolver": "local"
+      }
+    ],
+    "final": "remote",
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "outbounds": ["auto", "vless-direct"],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": ["vless-direct"],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "3m",
+      "tolerance": 50
+    },
+    {
+      "type": "vless",
+      "tag": "vless-direct",
+      "server": "138.124.33.206",
+      "server_port": 443,
+      "uuid": "be0589e6-eac2-48cd-94f4-e41ceb8aa3c8",
+      "flow": "",
+      "transport": {
+        "type": "grpc",
+        "service_name": ""
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "www.nvidia.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "GH4VZBxIED3RD2GmW68vdPFj9OaTNnoRRa8X7iWXt3M",
+          "short_id": "b3b2138fa73c0827"
+        }
+      }
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "rules": [{ "action": "sniff" }, { "ip_version": 6, "action": "reject" }],
+    "final": "proxy",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:9090",
+      "default_mode": "proxy"
+    },
+    "cache_file": { "enabled": true, "path": "cache.db", "store_fakeip": false }
+  }
+}

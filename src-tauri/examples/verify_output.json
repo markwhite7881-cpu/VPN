@@ -1,0 +1,164 @@
+{
+  "dns": {
+    "final": "remote",
+    "independent_cache": true,
+    "servers": [
+      {
+        "server": "223.5.5.5",
+        "tag": "local",
+        "type": "udp"
+      },
+      {
+        "domain_resolver": "local",
+        "server": "dns.google",
+        "tag": "remote",
+        "type": "https"
+      }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db",
+      "store_fakeip": false
+    },
+    "clash_api": {
+      "default_mode": "proxy",
+      "external_controller": "127.0.0.1:9090"
+    }
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "mixed-in",
+      "type": "mixed"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "interval": "3m",
+      "outbounds": [
+        "🇩🇪 DE-1",
+        "🇳🇱 NL-Edge",
+        "🇸🇬 SG-1",
+        "🇺🇸 US-Trojan"
+      ],
+      "tag": "auto",
+      "tolerance": 50,
+      "type": "urltest",
+      "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "default": "auto",
+      "outbounds": [
+        "auto",
+        "🇩🇪 DE-1",
+        "🇳🇱 NL-Edge",
+        "🇸🇬 SG-1",
+        "🇺🇸 US-Trojan"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    },
+    {
+      "flow": "xtls-rprx-vision",
+      "server": "de.example.com",
+      "server_port": 443,
+      "tag": "🇩🇪 DE-1",
+      "tls": {
+        "enabled": true,
+        "reality": {
+          "enabled": true,
+          "public_key": "PLACEHOLDER_REALITY_PUBKEY",
+          "short_id": "abcd1234"
+        },
+        "server_name": "cdn.example.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "type": "vless",
+      "uuid": "b2a3d6c8-1111-2222-3333-444455556666"
+    },
+    {
+      "obfs": {
+        "password": "op-secret",
+        "type": "salamander"
+      },
+      "password": "mysecret",
+      "server": "hy.example.com",
+      "server_port": 443,
+      "tag": "🇳🇱 NL-Edge",
+      "tls": {
+        "enabled": true,
+        "server_name": "hy.example.com"
+      },
+      "type": "hysteria2"
+    },
+    {
+      "method": "chacha20-ietf-poly1305",
+      "password": "secret",
+      "server": "1.2.3.4",
+      "server_port": 8388,
+      "tag": "🇸🇬 SG-1",
+      "type": "shadowsocks"
+    },
+    {
+      "password": "supersecret",
+      "server": "tr.example.com",
+      "server_port": 443,
+      "tag": "🇺🇸 US-Trojan",
+      "tls": {
+        "enabled": true,
+        "server_name": "tr.example.com"
+      },
+      "transport": {
+        "headers": {
+          "Host": "tr.example.com"
+        },
+        "path": "/trojan",
+        "type": "ws"
+      },
+      "type": "trojan"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local",
+    "final": "proxy",
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "reject",
+        "ip_version": 6
+      },
+      {
+        "action": "direct",
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "127.0.0.0/8",
+          "169.254.0.0/16"
+        ]
+      }
+    ]
+  }
+}

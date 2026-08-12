@@ -1,0 +1,138 @@
+{
+  "dns": {
+    "final": "remote",
+    "independent_cache": true,
+    "servers": [
+      {
+        "server": "223.5.5.5",
+        "tag": "local",
+        "type": "udp"
+      },
+      {
+        "domain_resolver": "local",
+        "server": "dns.google",
+        "tag": "remote",
+        "type": "https"
+      }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db",
+      "store_fakeip": false
+    },
+    "clash_api": {
+      "default_mode": "proxy",
+      "external_controller": "127.0.0.1:9090"
+    }
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "mixed-in",
+      "type": "mixed"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "interval": "3m",
+      "outbounds": [
+        "SS-local",
+        "VM-token",
+        "TUIC-local"
+      ],
+      "tag": "auto",
+      "tolerance": 50,
+      "type": "urltest",
+      "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "default": "auto",
+      "outbounds": [
+        "auto",
+        "SS-local",
+        "VM-token",
+        "TUIC-local"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    },
+    {
+      "method": "chacha20-ietf-poly1305",
+      "password": "secret",
+      "server": "127.0.0.1",
+      "server_port": 8388,
+      "tag": "SS-local",
+      "type": "shadowsocks"
+    },
+    {
+      "alter_id": 0,
+      "server": "127.0.0.1",
+      "server_port": 8080,
+      "tag": "VM-token",
+      "tls": {
+        "enabled": true,
+        "server_name": "127.0.0.1"
+      },
+      "transport": {
+        "path": "/",
+        "type": "ws"
+      },
+      "type": "vmess",
+      "uuid": "11111111-2222-3333-4444-555555555555"
+    },
+    {
+      "congestion_control": "bbr",
+      "password": "pw",
+      "server": "127.0.0.1",
+      "server_port": 443,
+      "tag": "TUIC-local",
+      "tls": {
+        "enabled": true,
+        "server_name": "example.com"
+      },
+      "type": "tuic",
+      "udp_relay_mode": "native",
+      "uuid": "11111111-2222-3333-4444-555555555555"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local",
+    "final": "proxy",
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "reject",
+        "ip_version": 6
+      },
+      {
+        "action": "direct",
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "127.0.0.0/8",
+          "169.254.0.0/16"
+        ]
+      }
+    ]
+  }
+}

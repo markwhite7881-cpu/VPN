@@ -1,0 +1,20 @@
+# Files / folders that should NOT trigger a Tauri dev rebuild.
+# Tauri 2 reads this file from src-tauri/ (next to tauri.conf.json).
+# See https://v2.tauri.app/reference/environment-variables/ (TAURI_CLI_WATCHER_IGNORE_FILENAME).
+
+# WebView2 / Wry cache (gets written at runtime; was triggering a full Rust
+# recompile on every change, restarting the app mid-Connect).
+cache.db
+cache.db-shm
+cache.db-wal
+EBWebView
+*.log
+
+# Tauri 2 generated icons / schemas
+gen/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

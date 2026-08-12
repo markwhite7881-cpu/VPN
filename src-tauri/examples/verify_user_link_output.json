@@ -1,0 +1,256 @@
+{
+  "dns": {
+    "final": "remote",
+    "independent_cache": true,
+    "servers": [
+      {
+        "server": "223.5.5.5",
+        "tag": "local",
+        "type": "udp"
+      },
+      {
+        "domain_resolver": "local",
+        "server": "dns.google",
+        "tag": "remote",
+        "type": "https"
+      }
+    ],
+    "strategy": "prefer_ipv4"
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true,
+      "path": "cache.db",
+      "store_fakeip": false
+    },
+    "clash_api": {
+      "default_mode": "proxy",
+      "external_controller": "127.0.0.1:9090"
+    }
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "listen_port": 2080,
+      "tag": "mixed-in",
+      "type": "mixed"
+    }
+  ],
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "outbounds": [
+    {
+      "interval": "3m",
+      "outbounds": [
+        "rfgrfgr32412-qt9htqyal6ys",
+        "🇩🇪 Основной сервер 563052113",
+        "🇩🇪 Белые списки 563052113",
+        "🇷🇺 Белые списки",
+        "🇷🇺 Россия"
+      ],
+      "tag": "auto",
+      "tolerance": 50,
+      "type": "urltest",
+      "url": "https://www.gstatic.com/generate_204"
+    },
+    {
+      "default": "auto",
+      "outbounds": [
+        "auto",
+        "rfgrfgr32412-qt9htqyal6ys",
+        "🇩🇪 Основной сервер 563052113",
+        "🇩🇪 Белые списки 563052113",
+        "🇷🇺 Белые списки",
+        "🇷🇺 Россия"
+      ],
+      "tag": "proxy",
+      "type": "selector"
+    },
+    {
+      "tag": "direct",
+      "type": "direct"
+    },
+    {
+      "tag": "block",
+      "type": "block"
+    },
+    {
+      "server": "138.124.33.206",
+      "server_port": 443,
+      "tag": "rfgrfgr32412-qt9htqyal6ys",
+      "tls": {
+        "enabled": true,
+        "reality": {
+          "enabled": true,
+          "public_key": "GH4VZBxIED3RD2GmW68vdPFj9OaTNnoRRa8X7iWXt3M",
+          "short_id": "b3b2138fa73c0827"
+        },
+        "server_name": "www.nvidia.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        }
+      },
+      "transport": {
+        "service_name": "",
+        "type": "grpc"
+      },
+      "type": "vless",
+      "uuid": "be0589e6-eac2-48cd-94f4-e41ceb8aa3c8"
+    },
+    {
+      "server": "anivka.top",
+      "server_port": 8443,
+      "tag": "🇩🇪 Основной сервер 563052113",
+      "tls": {
+        "alpn": [
+          "h2"
+        ],
+        "enabled": true,
+        "server_name": "anivka.top",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "safari"
+        }
+      },
+      "transport": {
+        "host": "",
+        "mode": "auto",
+        "path": "/api/v1/sync-8f31c2",
+        "type": "xhttp"
+      },
+      "type": "vless",
+      "uuid": "04a2bc7b-ea1d-4d44-a52f-d4248299e833"
+    },
+    {
+      "server": "151.236.109.225",
+      "server_port": 443,
+      "tag": "🇩🇪 Белые списки 563052113",
+      "tls": {
+        "alpn": [
+          "h2"
+        ],
+        "enabled": true,
+        "server_name": "anivka.ru",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        }
+      },
+      "transport": {
+        "host": "anivka.ru",
+        "mode": "packet-up",
+        "path": "/api/stream.php",
+        "type": "xhttp"
+      },
+      "type": "vless",
+      "uuid": "04a2bc7b-ea1d-4d44-a52f-d4248299e833"
+    },
+    {
+      "server": "188.72.103.3",
+      "server_port": 443,
+      "tag": "🇷🇺 Белые списки",
+      "tls": {
+        "enabled": true,
+        "server_name": "cdn.tracker.yandex.net",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        }
+      },
+      "transport": {
+        "headers": {
+          "Host": "rooms.voicenest.space"
+        },
+        "path": "/api/v1/voice/rooms/7c053d451d",
+        "type": "ws"
+      },
+      "type": "vless",
+      "uuid": "166ef05e-8ab5-43b7-8910-d1bb0a4326a5"
+    },
+    {
+      "server": "91.238.111.248",
+      "server_port": 443,
+      "tag": "🇷🇺 Россия",
+      "tls": {
+        "alpn": [
+          "h2",
+          "http/1.1"
+        ],
+        "enabled": true,
+        "server_name": "e0c2cith5i.a.trbcdn.net",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "firefox"
+        }
+      },
+      "transport": {
+        "host": "e0c2cith5i.a.trbcdn.net",
+        "mode": "packet-up",
+        "path": "/static/getFile/video/segment.ts",
+        "type": "xhttp"
+      },
+      "type": "vless",
+      "uuid": "000f16e8-cc68-4951-b336-acd81996efde"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local",
+    "final": "proxy",
+    "rule_set": [
+      {
+        "download_detour": "direct",
+        "format": "binary",
+        "tag": "rs-ru",
+        "type": "remote",
+        "update_interval": "1d",
+        "url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geoip-ru.srs"
+      },
+      {
+        "download_detour": "direct",
+        "format": "binary",
+        "tag": "rs-ads",
+        "type": "remote",
+        "update_interval": "1d",
+        "url": "https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/geosite-ads.srs"
+      }
+    ],
+    "rules": [
+      {
+        "action": "sniff"
+      },
+      {
+        "action": "reject",
+        "ip_version": 6
+      },
+      {
+        "action": "reject",
+        "network": "udp",
+        "port_range": [
+          "443:443"
+        ]
+      },
+      {
+        "action": "direct",
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "172.16.0.0/12",
+          "192.168.0.0/16",
+          "127.0.0.0/8",
+          "169.254.0.0/16"
+        ]
+      },
+      {
+        "action": "direct",
+        "rule_set": "rs-ru"
+      },
+      {
+        "action": "reject",
+        "rule_set": "rs-ads"
+      }
+    ]
+  }
+}

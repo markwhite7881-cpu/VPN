@@ -1,0 +1,33 @@
+# Build outputs
+/dist
+/node_modules
+/src-tauri/target
+/src-tauri/gen
+/src-tauri/Cargo.lock
+src-tauri/binaries/*.exe
+src-tauri/binaries/*.dll
+
+# Runtime cache (wry / webview2 data, written to cwd in dev mode)
+src-tauri/cache.db
+src-tauri/cache.db-shm
+src-tauri/cache.db-wal
+src-tauri/EBWebView/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode
+.idea
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# Local config
+.env.local
+.env.*.local
+src-tauri/.env
