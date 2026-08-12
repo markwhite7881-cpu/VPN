@@ -45,7 +45,11 @@ const DEFAULT_SETTINGS: GeneratorSettings = {
   },
   tun_interface_name: null,
   mixed_port: 2080,
-  local_dns: "223.5.5.5",
+  // Cloudflare 1.1.1.1 — globally reachable. Aliyun 223.5.5.5 only
+  // works from China and times out from most other regions, which
+  // breaks the rule-set fetcher (and the whole internet) when the
+  // local DNS is set to it from outside China.
+  local_dns: "1.1.1.1",
   remote_dns: "https://dns.google/dns-query",
   // ConfigBuilder is a stand-alone previewer; the live Connect
   // button lives in App.tsx, so pinning to a specific server

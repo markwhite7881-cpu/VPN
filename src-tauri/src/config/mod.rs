@@ -617,7 +617,7 @@ fn build_dns(settings: &GeneratorSettings) -> Value {
     let local_input = settings
         .local_dns
         .clone()
-        .unwrap_or_else(|| "223.5.5.5".to_string());
+        .unwrap_or_else(|| "1.1.1.1".to_string());
     let remote_input = settings
         .remote_dns
         .clone()
