@@ -84,7 +84,7 @@ const DEFAULT_SETTINGS: GeneratorSettings = {
   // works from China and times out elsewhere, which breaks the
   // rule-set fetcher (and the whole internet) when used from
   // outside China.
-  local_dns: "1.1.1.1",
+  local_dns: "77.88.8.8",
   // IP-form DoH endpoint. `dns.google` (hostname) needs DNS to
   // resolve, which is circular and breaks if the local resolver
   // can't reach it. Using the IP removes the resolution step.

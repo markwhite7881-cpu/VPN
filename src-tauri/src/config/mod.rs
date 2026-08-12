@@ -142,15 +142,8 @@ impl Default for GeneratorSettings {
             clash_api: ClashApiOptions::default(),
             tun_interface_name: None,
             mixed_port: Some(2080),
-            // Cloudflare 1.1.1.1 — globally reachable. Aliyun 223.5.5.5
-            // only works from China and times out elsewhere, which
-            // breaks the rule-set fetcher (and the whole internet) when
-            // set from outside China.
-            local_dns: Some("1.1.1.1".to_string()),
-            // IP-form DoH endpoint. `dns.google` (hostname) needs DNS
-            // to resolve, which is circular and breaks if the local
-            // resolver can't reach it. Using the IP removes the lookup.
-            remote_dns: Some("https://8.8.8.8/dns-query".to_string()),
+            local_dns: Some("77.88.8.8".to_string()),
+            remote_dns: Some("https://dns.google/dns-query".to_string()),
             // `None` here means "let `auto` (urltest) decide". The
             // frontend switches to a real tag the moment the user
             // picks a server in the picker.
@@ -375,21 +368,8 @@ fn build_route(settings: &GeneratorSettings) -> Value {
         if !is_rule_enabled(rule) {
             continue;
         }
-        // Flatten `rule.matchers` into top-level fields. The UI
-        // stores the matcher set as a nested object for ergonomic
-        // editing, but sing-box wants each matcher as a top-level
-        // field on the rule. Without this, sing-box fails with
-        //   "route.rules[N].matchers: json: unknown field \"matchers\""
-        let flattened = flatten_matchers(rule);
-        // Normalize the `action` field. The UI stores it as an object
-        // ({kind: "route", outbound: "proxy"}) for ergonomic editing;
-        // sing-box 1.14+ wants it as a STRING with the outbound lifted
-        // to a top-level field. Without this, sing-box check fails
-        // with: "json: cannot unmarshal object into Go struct field
-        // _RuleAction.action of type string".
-        let normalized = normalize_rule_action(&flattened);
         // Drop empty / no-op rules (would fail `sing-box check`).
-        let cleaned = strip_empty_fields(&normalized);
+        let cleaned = strip_empty_fields(rule);
         if has_meaningful_matchers(&cleaned) {
             rules.push(cleaned);
         }
@@ -439,80 +419,15 @@ fn is_rule_set_enabled(rs: &Value) -> bool {
     rs.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true)
 }
 
-/// UI-only fields on a rule that the React side adds for editing but
-/// sing-box doesn't know about. They MUST be stripped before
-/// `sing-box check` or sing-box will reject the config with
-/// "unknown field" errors.
-///
-/// - `enabled`:  per-rule on/off switch (sing-box has no equivalent;
-///               disabled rules are dropped entirely, not marked)
-/// - `id`:       React key + drag-and-drop identifier; meaningless to
-///               the proxy
-/// - `label`:    human-readable description shown in the UI; not
-///               part of the sing-box rule schema
-const UI_ONLY_FIELDS: &[&str] = &["enabled", "id", "label"];
-
-/// Flatten the nested `matchers` object into top-level rule fields.
-///
-/// UI shape (ergonomic for editing):
-/// ```json
-/// {
-///   "id": "rule-1",
-///   "matchers": { "ip_cidr": ["10.0.0.0/8"], "domain_suffix": ["..."] },
-///   "action": "route"
-/// }
-/// ```
-///
-/// sing-box shape (all matchers as top-level siblings of `action`):
-/// ```json
-/// {
-///   "ip_cidr": ["10.0.0.0/8"],
-///   "domain_suffix": ["..."],
-///   "action": "route"
-/// }
-/// ```
-///
-/// If `rule.matchers` is missing, already a flat object, or has
-/// the wrong shape, the rule passes through unchanged.
-fn flatten_matchers(rule: &Value) -> Value {
-    let Some(obj) = rule.as_object() else {
-        return rule.clone();
-    };
-    let Some(matchers) = obj.get("matchers") else {
-        return rule.clone();
-    };
-    let Some(matchers_obj) = matchers.as_object() else {
-        // Already flat (no `matchers` wrapper) or has a weird shape
-        // (e.g. a string or array). Pass through and let later
-        // normalization / sing-box's own error message sort it out.
-        return rule.clone();
-    };
-    // Don't drop the `matchers` key if it's empty — that means
-    // the user added a rule with no matchers, which is a no-op
-    // (the `has_meaningful_matchers` check below will reject it).
-    let mut out = obj.clone();
-    out.remove("matchers");
-    for (k, v) in matchers_obj {
-        // Don't overwrite a real top-level field (e.g. if a user
-        // somehow had both `rule.action` and `rule.matchers.action`
-        // — the top-level wins).
-        if !out.contains_key(k) {
-            out.insert(k.clone(), v.clone());
-        }
-    }
-    Value::Object(out)
-}
-
-/// Recursively strip `null` values, empty arrays/objects, and UI-only
-/// fields from a JSON rule. Empty matchers would fail `sing-box check`
-/// (every rule needs at least one matcher), and unknown fields make
-/// sing-box fail with "json: unknown field" errors.
+/// Recursively strip `null` values and empty arrays/objects from a JSON
+/// rule. Empty matchers would fail `sing-box check` (every rule needs
+/// at least one matcher).
 fn strip_empty_fields(v: &Value) -> Value {
     match v {
         Value::Object(map) => {
             let mut out = serde_json::Map::new();
             for (k, val) in map {
-                if UI_ONLY_FIELDS.contains(&k.as_str()) {
+                if k == "enabled" {
                     // UI-only, never emitted to sing-box.
                     continue;
                 }
@@ -552,67 +467,6 @@ fn has_meaningful_matchers(rule: &Value) -> bool {
     false
 }
 
-/// Normalize a rule's `action` field from the UI's object form to
-/// sing-box's string form.
-///
-/// UI shape (ergonomic for editing):
-/// ```json
-/// { "matchers": {...}, "action": {"kind": "route", "outbound": "proxy"} }
-/// ```
-///
-/// sing-box shape:
-/// ```json
-/// { "matchers": {...}, "action": "route", "outbound": "proxy" }
-/// ```
-///
-/// For actions that carry no outbound (`reject`, `hijack-dns`, `sniff`,
-/// `resolve`) the `kind` is just lifted to a string — the
-/// `outbound` field is dropped.
-///
-/// If `action` is already a string (rules typed by hand, or imported
-/// rule-sets) the rule passes through unchanged.
-fn normalize_rule_action(rule: &Value) -> Value {
-    let Some(obj) = rule.as_object() else {
-        return rule.clone();
-    };
-    let mut out = obj.clone();
-
-    // Pull a snapshot of the action value so the borrow of `out`
-    // ends before we start mutating it below.
-    let action_snapshot = out.get("action").cloned();
-    let action = match action_snapshot {
-        Some(a) => a,
-        None => return Value::Object(out),
-    };
-
-    if action.is_string() {
-        // Already in sing-box shape. Nothing to do.
-        return Value::Object(out);
-    }
-
-    let Some(action_obj) = action.as_object() else {
-        // Unknown shape — leave alone, let sing-box fail loudly.
-        return Value::Object(out);
-    };
-
-    let Some(kind) = action_obj.get("kind").and_then(|k| k.as_str()) else {
-        // No `kind` field — leave the original object in place so
-        // sing-box's own error message points at something useful.
-        return Value::Object(out);
-    };
-
-    // Replace the object with the string form.
-    out.insert("action".into(), Value::String(kind.to_string()));
-    // Lift the outbound to a top-level field (only meaningful for
-    // action: "route" — for the other kinds the field, if any, is
-    // ignored by sing-box, but we forward it anyway for forward-
-    // compatibility).
-    if let Some(outbound) = action_obj.get("outbound").and_then(|o| o.as_str()) {
-        out.insert("outbound".into(), Value::String(outbound.to_string()));
-    }
-    Value::Object(out)
-}
-
 fn build_dns(settings: &GeneratorSettings) -> Value {
     // sing-box 1.12+ requires typed DNS server entries.
     //
@@ -624,11 +478,11 @@ fn build_dns(settings: &GeneratorSettings) -> Value {
     let local_input = settings
         .local_dns
         .clone()
-        .unwrap_or_else(|| "1.1.1.1".to_string());
+        .unwrap_or_else(|| "77.88.8.8".to_string());
     let remote_input = settings
         .remote_dns
         .clone()
-        .unwrap_or_else(|| "https://8.8.8.8/dns-query".to_string());
+        .unwrap_or_else(|| "https://dns.google/dns-query".to_string());
 
     let (local_type, local_server) = classify_dns(&local_input);
     let (remote_type, remote_server) = classify_dns(&remote_input);
@@ -826,19 +680,16 @@ mod tests {
         let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
         let servers = cfg["dns"]["servers"].as_array().unwrap();
         assert_eq!(servers.len(), 2);
-        // Local default is 1.1.1.1 (Cloudflare) — globally reachable,
-        // type=udp, no detour.
+        // Local default is 77.88.8.8 (Yandex DNS) — type=udp, no detour.
         let local = &servers[0];
         assert_eq!(local["tag"], "local");
         assert_eq!(local["type"], "udp");
-        assert_eq!(local["server"], "1.1.1.1");
-        // Remote default is https://8.8.8.8/dns-query — type=https.
-        // IP-form (not dns.google) avoids the circular DNS-for-DNS lookup
-        // when the local resolver can't reach the hostname.
+        assert_eq!(local["server"], "77.88.8.8");
+        // Remote default is https://dns.google/dns-query — type=https, host stripped.
         let remote = &servers[1];
         assert_eq!(remote["tag"], "remote");
         assert_eq!(remote["type"], "https");
-        assert_eq!(remote["server"], "8.8.8.8");
+        assert_eq!(remote["server"], "dns.google");
         // DoH should reference local domain_resolver.
         assert_eq!(remote["domain_resolver"], "local");
     }
@@ -1121,211 +972,5 @@ mod tests {
             cfg["route"].get("default_http_client").is_none(),
             "default_http_client should be absent when no rule-sets"
         );
-    }
-
-    #[test]
-    fn action_object_is_normalized_to_string_in_generated_route() {
-        // The UI stores rules with `action: {kind: "route", outbound: "X"}`
-        // (object form, ergonomic for editing). sing-box 1.14+ requires
-        // `action: "route"` as a STRING with `outbound` lifted to the
-        // top level. Without normalization, sing-box fails with:
-        //   "json: cannot unmarshal object into Go struct field
-        //    _RuleAction.action of type string"
-        let s = routing(
-            GeneratorSettings::default(),
-            RoutingOptions {
-                rules: vec![
-                    json!({
-                        "matchers": {"ip_cidr": ["10.0.0.0/8"]},
-                        "action": {"kind": "route", "outbound": "direct"},
-                    }),
-                    json!({
-                        "matchers": {"process_name": ["Telegram.exe"]},
-                        "action": {"kind": "route", "outbound": "proxy"},
-                    }),
-                    json!({
-                        "matchers": {"ip_version": 6},
-                        "action": {"kind": "reject"},
-                    }),
-                    json!({
-                        "matchers": {"network": "udp"},
-                        "action": {"kind": "hijack-dns"},
-                    }),
-                ],
-                ..RoutingOptions::default()
-            },
-        );
-        let cfg = Config::build(&fixture_outbounds(), &s);
-        let rules = cfg["route"]["rules"]
-            .as_array()
-            .expect("route.rules is array");
-        // System rules come first (dns-bypass, sniff), then 4 user.
-        let user_rules = &rules[2..];
-        // Rule 1: action: route with outbound, ip_cidr flattened
-        assert_eq!(user_rules[0]["action"], "route");
-        assert_eq!(user_rules[0]["outbound"], "direct");
-        assert_eq!(user_rules[0]["ip_cidr"][0], "10.0.0.0/8");
-        assert!(user_rules[0].get("matchers").is_none());
-        // Rule 2: process_name + route with outbound
-        assert_eq!(user_rules[1]["action"], "route");
-        assert_eq!(user_rules[1]["outbound"], "proxy");
-        assert_eq!(user_rules[1]["process_name"][0], "Telegram.exe");
-        // Rule 3: reject (no outbound)
-        assert_eq!(user_rules[2]["action"], "reject");
-        assert!(user_rules[2].get("outbound").is_none());
-        // Rule 4: hijack-dns (no outbound)
-        assert_eq!(user_rules[3]["action"], "hijack-dns");
-        assert!(user_rules[3].get("outbound").is_none());
-    }
-
-    #[test]
-    fn action_string_passes_through_unchanged() {
-        // Rules written by hand or imported from rule-sets may already
-        // use the sing-box string form. We must NOT corrupt those.
-        let s = routing(
-            GeneratorSettings::default(),
-            RoutingOptions {
-                rules: vec![json!({
-                    "ip_cidr": ["10.0.0.0/8"],
-                    "action": "route",
-                    "outbound": "direct",
-                })],
-                ..RoutingOptions::default()
-            },
-        );
-        let cfg = Config::build(&fixture_outbounds(), &s);
-        let rules = cfg["route"]["rules"].as_array().expect("array");
-        // The user rule is at index 2 (after dns-bypass + sniff).
-        assert_eq!(rules[2]["action"], "route");
-        assert_eq!(rules[2]["outbound"], "direct");
-    }
-
-    #[test]
-    fn route_object_rule_was_the_bug_user_just_hit() {
-        // Direct reproduction of the error the user reported in the
-        // chat: sing-box refused to start with
-        //   "route.rules[2].action: json: cannot unmarshal object
-        //    into Go struct field _RuleAction.action of type string"
-        // This is the UI form: action as an object inside a matchers
-        // wrapper. The fix (normalize + flatten) is what makes this
-        // test pass.
-        let s = routing(
-            GeneratorSettings::default(),
-            RoutingOptions {
-                rules: vec![json!({
-                    "matchers": {"domain_suffix": ["example.com"]},
-                    "action": {"kind": "route", "outbound": "direct"},
-                })],
-                ..RoutingOptions::default()
-            },
-        );
-        let cfg = Config::build(&fixture_outbounds(), &s);
-        let user_rule = &cfg["route"]["rules"][2];
-        // Critical: action must be a STRING, not an object, otherwise
-        // sing-box will fail to decode.
-        assert!(
-            user_rule["action"].is_string(),
-            "action must be a string for sing-box, got: {}",
-            user_rule["action"]
-        );
-        assert_eq!(user_rule["action"], "route");
-        assert_eq!(user_rule["outbound"], "direct");
-        // And the `matchers` wrapper must be gone
-        assert!(user_rule.get("matchers").is_none());
-    }
-
-    #[test]
-    fn ui_only_fields_are_stripped_before_emit() {
-        // The UI stamps every rule with id (React key), label
-        // (display name), and enabled (on/off toggle). All three are
-        // meaningless to sing-box and would cause "unknown field"
-        // errors. The user's second bug report was specifically:
-        //   route.rules[2].id: json: unknown field "id"
-        // This test guards against any future reintroduction.
-        let s = routing(
-            GeneratorSettings::default(),
-            RoutingOptions {
-                rules: vec![json!({
-                    "id": "rule-123",
-                    "label": "Bypass LAN",
-                    "enabled": true,
-                    "matchers": {"ip_cidr": ["10.0.0.0/8"]},
-                    "action": {"kind": "route", "outbound": "direct"},
-                })],
-                ..RoutingOptions::default()
-            },
-        );
-        let cfg = Config::build(&fixture_outbounds(), &s);
-        let user_rule = &cfg["route"]["rules"][2];
-        // UI-only fields must be absent
-        assert!(user_rule.get("id").is_none(), "id must be stripped");
-        assert!(user_rule.get("label").is_none(), "label must be stripped");
-        assert!(
-            user_rule.get("enabled").is_none(),
-            "enabled must be stripped"
-        );
-        // The matchers wrapper must be flattened
-        assert!(user_rule.get("matchers").is_none());
-        // Real fields must survive
-        assert_eq!(user_rule["ip_cidr"][0], "10.0.0.0/8");
-        assert_eq!(user_rule["action"], "route");
-        assert_eq!(user_rule["outbound"], "direct");
-    }
-
-    #[test]
-    fn matchers_wrapper_is_flattened_into_top_level_fields() {
-        // User's third bug report:
-        //   route.rules[2].matchers: json: unknown field "matchers"
-        // The UI stores matchers as a nested object (ergonomic for
-        // editing). sing-box wants each matcher as a top-level
-        // sibling of `action`. This test guards the flatten step.
-        let s = routing(
-            GeneratorSettings::default(),
-            RoutingOptions {
-                rules: vec![json!({
-                    "matchers": {
-                        "domain_suffix": ["example.com"],
-                        "ip_cidr": ["10.0.0.0/8"],
-                    },
-                    "action": "route",
-                    "outbound": "direct",
-                })],
-                ..RoutingOptions::default()
-            },
-        );
-        let cfg = Config::build(&fixture_outbounds(), &s);
-        let user_rule = &cfg["route"]["rules"][2];
-        // `matchers` wrapper must be gone
-        assert!(user_rule.get("matchers").is_none());
-        // Both matchers are now at the top level
-        assert_eq!(user_rule["domain_suffix"][0], "example.com");
-        assert_eq!(user_rule["ip_cidr"][0], "10.0.0.0/8");
-        // action and outbound unchanged
-        assert_eq!(user_rule["action"], "route");
-        assert_eq!(user_rule["outbound"], "direct");
-    }
-
-    #[test]
-    fn empty_matchers_rule_is_dropped() {
-        // A rule with an empty matchers object has nothing to match
-        // on. sing-box would reject it ("every rule needs at least
-        // one matcher"). Drop it entirely so the emitted config is
-        // sing-box-valid.
-        let s = routing(
-            GeneratorSettings::default(),
-            RoutingOptions {
-                rules: vec![json!({
-                    "matchers": {},
-                    "action": "route",
-                    "outbound": "direct",
-                })],
-                ..RoutingOptions::default()
-            },
-        );
-        let cfg = Config::build(&fixture_outbounds(), &s);
-        let rules = cfg["route"]["rules"].as_array().expect("array");
-        // Only the 2 system rules remain (dns-bypass + sniff), the
-        // empty-matcher user rule is dropped.
-        assert_eq!(rules.len(), 2);
     }
 }
