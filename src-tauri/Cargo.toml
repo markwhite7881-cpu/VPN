@@ -8,6 +8,25 @@ repository = ""
 edition = "2021"
 rust-version = "1.77"
 
+# Default features.
+#
+# `custom-protocol` is what `tauri build` (via the tauri CLI) enables
+# automatically. Without it, `tauri::is_dev()` returns `true` and the
+# app opens the system browser to the `devUrl` instead of embedding
+# the built `dist/` into the binary. Running `cargo build` directly
+# (without `tauri build`) silently produces a 6.7 MB dev-mode exe
+# that shows Edge pointing at `localhost:1420` with
+# ERR_CONNECTION_REFUSED. Enabling `custom-protocol` by default here
+# keeps `cargo build --release` and `tauri build` equivalent.
+[features]
+# This feature is used to enable the custom-protocol feature on the
+# tauri crate, which makes the runtime embed the built `dist/` and
+# NOT try to open the dev server. Tauri's CLI does this automatically
+# (via `--features custom-protocol`); we set it as a default so that
+# plain `cargo build --release` produces the same artifact.
+custom-protocol = ["tauri/custom-protocol"]
+default = ["custom-protocol"]
+
 # Avoid multiple binaries in the bundle
 [[bin]]
 name = "singbox-client"
