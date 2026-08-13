@@ -6,7 +6,7 @@
 
 **Privacy-first GUI VPN client built on top of [sing-box](https://github.com/SagerNet/sing-box).**
 
-Tauri 2 + React + TypeScript, стилизован под [classquiz](https://classquiz.ru).
+Tauri 2 + React + TypeScript.
 
 [![Release](https://img.shields.io/github/v/release/markwhite7881-cpu/cloakwire?include_prereleases&sort=semver&style=for-the-badge)](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/markwhite7881-cpu/cloakwire/total?style=for-the-badge)](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)
@@ -114,7 +114,7 @@ Portable exe: `src-tauri\target\release\cloakwire.exe`
 ```
 
 **Слои:**
-1. **Frontend** — React + TypeScript + Tailwind, дизайн-токены classquiz
+1. **Frontend** — React + TypeScript + Tailwind
 2. **Tauri shell** — Rust-обёртка: команды процесса, авто-обновления, логирование, TUN-управление
 3. **sing-box core** — сам VPN-протокол, конфиг генерируется из UI-структуры
 
@@ -199,7 +199,6 @@ PR-ы приветствуются. Перед большим изменение
 
 - [**SagerNet/sing-box**](https://github.com/SagerNet/sing-box) — самый быстрый и гибкий VPN-протокол из существующих
 - [**Tauri**](https://tauri.app) — обёртка для десктопных приложений, которая не подводит
-- [**classquiz**](https://classquiz.ru) — design system inspiration
 
 ---
 
