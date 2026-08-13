@@ -22,15 +22,18 @@ OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 W, H = 1280, 640
 
-# Colors (matching the app's dark slate theme).
-BG_TOP = (10, 14, 26)       # #0a0e1a
-BG_BOTTOM = (15, 23, 42)    # #0f172a
-ACCENT = (34, 211, 238)     # #22d3ee (cyan-400)
-TEXT_PRIMARY = (248, 250, 252)   # #f8fafc
-TEXT_SECONDARY = (148, 163, 184) # #94a3b8
-TEXT_MUTED = (71, 85, 105)       # #475569
-CHIP_BORDER = (51, 65, 85)       # #334155
-CHIP_BG = (30, 41, 59)           # #1e293b
+# Colors — strictly black-and-white, matching the app's design
+# system (zinc-950 background, zinc-50 foreground, no chromatic
+# accent). The intent: the social preview looks like a frame from
+# the app itself, not a separate marketing image.
+BG_TOP = (5, 5, 5)              # #050505
+BG_BOTTOM = (12, 12, 12)        # #0c0c0c
+ACCENT = (255, 255, 255)        # pure white (used sparingly)
+TEXT_PRIMARY = (250, 250, 250)  # #fafafa
+TEXT_SECONDARY = (161, 161, 170)  # #a1a1aa (zinc-400)
+TEXT_MUTED = (82, 82, 91)       # #52525b (zinc-600)
+CHIP_BORDER = (63, 63, 70)      # #3f3f46 (zinc-700)
+CHIP_BG = (24, 24, 27)          # #18181b (zinc-900)
 
 
 def make_gradient(w: int, h: int) -> Image.Image:
@@ -102,8 +105,8 @@ def main() -> None:
     img = make_gradient(W, H).convert("RGBA")
     draw = ImageDraw.Draw(img)
 
-    # --- Background subtle glow behind the logo ---
-    make_glow(img, (340, H // 2), 260, ACCENT, intensity=70)
+    # --- Background subtle white glow behind the logo (very soft) ---
+    make_glow(img, (340, H // 2), 260, ACCENT, intensity=22)
 
     # --- Logo (left side) ---
     logo = Image.open(LOGO_PATH).convert("RGBA")

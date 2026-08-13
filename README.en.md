@@ -19,6 +19,10 @@ Tauri 2 + React + TypeScript, styled after [classquiz](https://classquiz.ru).
 
 ---
 
+<img src="dist-release/social-preview.png" alt="Cloakwire" width="100%" />
+
+---
+
 ## 🎯 What is this
 
 **Cloakwire** is a minimalistic GUI VPN client for Windows that wraps the power of [sing-box](https://github.com/SagerNet/sing-box) in a clean, opinionated interface. Full protocol stack (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC), auto-updates and the sing-box core in one binary.
