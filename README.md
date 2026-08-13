@@ -91,7 +91,7 @@ Portable exe: `src-tauri\target\release\cloakwire.exe`
 ## 🖼️ Скриншоты
 
 ### Home — главный экран
-Pикер сервера, статус sing-box, live метрики Download/Upload, латентность по всем 24 серверам.
+Pикер сервера, статус sing-box, live метрики Download/Upload, задержка по всем серверам.
 
 ![Home tab](dist-release/screenshots/01-home.png)
 
