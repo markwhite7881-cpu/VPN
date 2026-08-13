@@ -222,6 +222,7 @@ PR-ы приветствуются. Перед большим изменение
 
 - [**SagerNet/sing-box**](https://github.com/SagerNet/sing-box) — самый быстрый и гибкий VPN-протокол из существующих
 - [**Tauri**](https://tauri.app) — обёртка для десктопных приложений, которая не подводит
+- [**@anivPlugins**](https://t.me/anivPlugins) и [**@AnivVPN_bot**](https://t.me/AnivVPN_bot) — за предоставленные серверы для тестирования
 
 ---
 
