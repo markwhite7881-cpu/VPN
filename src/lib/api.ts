@@ -115,6 +115,23 @@ export const api = {
   // so the user can click on an .exe instead of typing its name.
   // Returns an empty array outside the Tauri shell (vite dev preview).
   listProcesses: () => call<ProcessInfo[]>("list_processes"),
+
+  // sing-box auto-update (separate from the Tauri app-shell
+  // updater). `checkSingboxUpdate` queries the GitHub releases
+  // API and returns whether a newer Windows build is available.
+  // `applySingboxUpdate` downloads + extracts + replaces the
+  // runtime-cached binary. Stops the running sing-box first.
+  checkSingboxUpdate: () =>
+    call<{
+      current_version: string;
+      latest_version: string;
+      available: boolean;
+      download_url: string | null;
+      asset_name: string | null;
+      size_bytes: number;
+    }>("check_singbox_update"),
+  applySingboxUpdate: (downloadUrl: string) =>
+    call<string>("apply_singbox_update", { downloadUrl }),
 };
 
 export { TauriCommandError };

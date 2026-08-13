@@ -481,9 +481,30 @@ export default function App() {
         if (!cancelled) setError(humanError(e));
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
+  }, []);
+
+  /**
+   * Re-fetch the sing-box version. Called by the Home tab's
+   * `UpdateCard` after a successful sing-box auto-update so the
+   * status pill, logs, and version display all reflect the new
+   * binary that lives at `<app_data_dir>/singbox-runtime/`.
+   *
+   * The binary path resolution itself is handled by
+   * `ProcessManager::locate_binary` (it now prefers the runtime
+   * copy over the bundled one), so we just ask for the version
+   * again and trust the result.
+   */
+  const refetchSingboxVersion = useCallback(async () => {
+    if (!inTauri) return;
+    try {
+      const ver = await api.getSingboxVersion().catch(() => null);
+      if (ver) setVersion(ver);
+    } catch (e) {
+      // Non-fatal — the rest of the UI keeps working with the
+      // stale version until the next manual refresh.
+      console.error("refetchSingboxVersion failed:", e);
+    }
   }, []);
 
   useEffect(() => {
@@ -806,6 +827,8 @@ export default function App() {
             selectedIndex={selectedIndex}
             activeOutbound={activeOutbound}
             geoipByIp={geoip.byIp}
+            currentSingboxVersion={version?.version ?? null}
+            onSingboxUpdated={refetchSingboxVersion}
             onSelect={onSelectProfile}
             onConnect={onStart}
             onDisconnect={onStop}

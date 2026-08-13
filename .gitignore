@@ -7,6 +7,11 @@
 src-tauri/binaries/*.exe
 src-tauri/binaries/*.dll
 
+# Tauri updater signing key. The .pub file IS committed (so the
+# app can verify signed updates) but the private .key must NEVER
+# be committed — losing it means no future updates can be signed.
+src-tauri/.tauri-updater.key
+
 # Runtime cache (wry / webview2 data, written to cwd in dev mode)
 src-tauri/cache.db
 src-tauri/cache.db-shm

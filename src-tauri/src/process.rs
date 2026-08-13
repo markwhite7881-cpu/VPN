@@ -141,12 +141,27 @@ impl ProcessManager {
     ///
     /// Order:
     /// 1. `SINGBOX_BIN` env override (useful for tests / custom builds).
-    /// 2. `<resource_dir>/binaries/sing-box[-<triple>]` (release).
-    /// 3. Walk upwards from `CARGO_MANIFEST_DIR` to find
+    /// 2. `<app_data_dir>/singbox-runtime/sing-box.exe` — the
+    ///    user-writable copy placed by the sing-box auto-update
+    ///    (see `updates::apply_singbox_update`). This is what the
+    ///    user gets after they accept an auto-update.
+    /// 3. `<resource_dir>/binaries/sing-box[-<triple>]` (release).
+    /// 4. Walk upwards from `CARGO_MANIFEST_DIR` to find
     ///    `src-tauri/binaries/sing-box-<triple>` (dev).
     pub fn locate_binary(app: &AppHandle) -> AppResult<PathBuf> {
         if let Ok(p) = std::env::var("SINGBOX_BIN") {
             let p = PathBuf::from(p);
+            if p.exists() {
+                return Ok(p);
+            }
+        }
+
+        // User-writable runtime copy (set by updates::apply_singbox_update).
+        // On a fresh install this doesn't exist, so we fall through to
+        // the bundled binary. After an auto-update it wins, which is
+        // exactly what the user wants — the "newer" version is the
+        // one they accepted.
+        if let Ok(p) = crate::updates::runtime_bin_path(app) {
             if p.exists() {
                 return Ok(p);
             }

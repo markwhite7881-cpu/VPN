@@ -768,6 +768,25 @@ pub async fn list_processes() -> AppResult<Vec<ProcessInfo>> {
     Ok(out)
 }
 
+// ── sing-box auto-update (see `updates` module) ─────────────────────────
+
+/// Frontend-facing wrapper: returns the current + latest sing-box
+/// versions and whether an update is available.
+#[tauri::command]
+pub async fn check_singbox_update(app: AppHandle) -> AppResult<crate::updates::SingboxUpdateInfo> {
+    crate::updates::check_singbox_update(&app).await
+}
+
+/// Frontend-facing wrapper: download + replace the runtime-cached
+/// sing-box. `download_url` must come from `check_singbox_update`'s
+/// `SingboxUpdateInfo.download_url` — we don't refetch the release
+/// list, so the user is always updating to the version they were
+/// shown.
+#[tauri::command]
+pub async fn apply_singbox_update(app: AppHandle, download_url: String) -> AppResult<String> {
+    crate::updates::apply_singbox_update(app, download_url).await
+}
+
 #[cfg(test)]
 mod process_tests {
     use super::*;

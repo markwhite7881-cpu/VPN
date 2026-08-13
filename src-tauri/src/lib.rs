@@ -4,6 +4,11 @@
 //! split makes it possible to add a `cdylib` target later for mobile
 //! builds without touching the binary entry point.
 
+// Force-rebuild marker: tauri::generate_context!() embeds dist/ at lib
+// compile time. Touching this file makes cargo recompile the lib, which
+// re-runs the macro and re-embeds the current dist/ (after every
+// `npm run build`). 2026-08-13.
+
 use std::sync::Arc;
 
 use tauri::Manager;
@@ -16,6 +21,7 @@ pub mod error;
 pub mod parser;
 pub mod process;
 pub mod traffic;
+pub mod updates;
 
 use process::ProcessManager;
 
@@ -33,6 +39,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             // Forward the `--minimized` flag (no-op on Windows/Linux)
@@ -100,6 +107,8 @@ pub fn run() {
             commands::apply_system_proxy,
             commands::clear_system_proxy,
             commands::list_processes,
+            commands::check_singbox_update,
+            commands::apply_singbox_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running singbox-client");

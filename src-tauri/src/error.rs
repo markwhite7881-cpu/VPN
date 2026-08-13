@@ -37,6 +37,13 @@ pub enum AppError {
     #[error("clash api error: {0}")]
     Clash(String),
 
+    /// HTTP / network failure (sing-box update check, etc.).
+    /// `io::Error` doesn't carry enough context for HTTP-level
+    /// errors like "GitHub returned 403", so this exists as a
+    /// distinct string variant.
+    #[error("network error: {0}")]
+    Network(String),
+
     #[error("tauri error: {0}")]
     Tauri(#[from] tauri::Error),
 }
@@ -58,6 +65,7 @@ impl Serialize for AppError {
             AppError::Io(_) => ("io", self.to_string()),
             AppError::Serde(_) => ("serde", self.to_string()),
             AppError::Clash(_) => ("clash", self.to_string()),
+            AppError::Network(_) => ("network", self.to_string()),
             AppError::Tauri(_) => ("tauri", self.to_string()),
         };
         let mut st = s.serialize_struct("AppError", 2)?;

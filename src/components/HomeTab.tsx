@@ -12,6 +12,7 @@ import {
 import { Card, CardContent } from "@/components/Card";
 import { Badge } from "@/components/Badge";
 import { FlagIcon } from "@/components/FlagIcon";
+import { UpdateCard } from "@/components/UpdateCard";
 import { useTrafficStream } from "@/hooks/useTrafficStream";
 import { latencyToBars, useServerLatency } from "@/hooks/useServerLatency";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,11 @@ export interface HomeTabProps {
   activeOutbound: string | null;
   /** ip → country-code map, populated by the useGeoIp hook. */
   geoipByIp: Record<string, string>;
+  /** sing-box version string, fetched on app start. */
+  currentSingboxVersion: string | null;
+  /** Fires after a successful sing-box auto-update so the parent
+   *  can re-fetch the version. */
+  onSingboxUpdated: () => void;
   onSelect: (index: number) => void;
   onConnect: () => void;
   onDisconnect: () => void;
@@ -56,6 +62,8 @@ export function HomeTab({
   selectedIndex,
   activeOutbound,
   geoipByIp,
+  currentSingboxVersion,
+  onSingboxUpdated,
   onSelect,
   onConnect,
   onDisconnect,
@@ -325,6 +333,13 @@ export function HomeTab({
           </CardContent>
         </Card>
       )}
+
+      {/* App shell + sing-box auto-update. Auto-checks on mount; the
+          user can force a refresh with the per-row Check button. */}
+      <UpdateCard
+        currentSingboxVersion={currentSingboxVersion}
+        onSingboxUpdated={onSingboxUpdated}
+      />
     </div>
   );
 }
