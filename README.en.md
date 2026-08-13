@@ -82,15 +82,30 @@ Done. All traffic from the selected apps goes via VPN, the rest stays direct.
 
 ## 🖼️ Screenshots
 
-> Screenshots are coming soon — we'll add them in v1.0.3+.
+### Home — main screen
+Server picker, sing-box status, live Download/Upload metrics, latency across all 24 servers.
 
-In words:
-- **Header:** Cloakwire logo + version + sing-box core status
-- **Home:** big Start/Stop button, live traffic graph, updates card
-- **Servers:** subscriptions list + manual profiles, drag-and-drop, latency ping
-- **Routing:** top — two process-pickers ("Apps via VPN" / "Apps direct"), below — Advanced (full rule editor, drag-and-drop, presets, rule-sets)
-- **Config:** TUN / system proxy / both modes, DNS, generated `config.json` preview
-- **Logs:** live sing-box tail with filter
+![Home tab](dist-release/screenshots/01-home.png)
+
+### Servers — adding profiles
+Share-link support (`vless://`, `vmess://`, `ss://`, `hy2://`, `trojan://`, `tuic://`) and subscriptions (URL, base64, Clash YAML). Format auto-detected.
+
+![Servers tab](dist-release/screenshots/02-servers.png)
+
+### Config — tunnel modes and DNS
+Four modes: **TUN** (system-wide, requires admin), **System Proxy** (local SOCKS/HTTP on `127.0.0.1:2080`), **Both** (TUN + local proxy), **None** (outbounds only, for testing). Separate fields for local and remote DNS.
+
+![Config tab](dist-release/screenshots/03-config.png)
+
+### Routing — simple UX
+Two process-pickers: **Apps via VPN** (these programs go through the VPN) and **Apps direct** (these always bypass the VPN, even if a rule-set or final outbound would otherwise route them via proxy). Everything else lives in Advanced.
+
+![Routing tab — simple UX](dist-release/screenshots/04-routing.png)
+
+### Routing Advanced — full rule editor
+Sniff protocol, auto-detect interface, Final outbound. Custom rules (drag-and-drop, all sing-box matchers). Rule-sets (Loyalsoldier / meta-rules-dat / custom URL). One-click starter rules (Bypass LAN, Reject IPv6, Block QUIC, Bypass CN, Bypass RU, Block Ads, Block Malware). Rule-set library with Loyalsoldier ↔ meta source toggle.
+
+![Routing tab — Advanced](dist-release/screenshots/05-routing-advanced.png)
 
 ---
 

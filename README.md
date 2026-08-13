@@ -90,15 +90,30 @@ Portable exe: `src-tauri\target\release\cloakwire.exe`
 
 ## 🖼️ Скриншоты
 
-> Скриншоты появятся скоро — соберём их на v1.0.3+.
+### Home — главный экран
+Pикер сервера, статус sing-box, live метрики Download/Upload, латентность по всем 24 серверам.
 
-А пока — словами:
-- **Header:** логотип Cloakwire + версия + статус sing-box core
-- **Home:** большая кнопка Start/Stop, live график трафика, обновления
-- **Servers:** список подписок + manual profiles, drag-and-drop, latency ping
-- **Routing:** top — два process-picker ("Apps via VPN" / "Apps direct"), ниже — Advanced (полный rule editor, drag-and-drop, presets, rule-sets)
-- **Config:** режимы TUN/system proxy/both, DNS, preview сгенерированного `config.json`
-- **Logs:** live tail sing-box с фильтром
+![Home tab](dist-release/screenshots/01-home.png)
+
+### Servers — добавление профилей
+Поддержка share-link (`vless://`, `vmess://`, `ss://`, `hy2://`, `trojan://`, `tuic://`) и подписок (URL, base64, Clash YAML). Авто-детект формата.
+
+![Servers tab](dist-release/screenshots/02-servers.png)
+
+### Config — режимы туннеля и DNS
+Четыре режима: **TUN** (system-wide, требует admin), **System Proxy** (локальный SOCKS/HTTP на `127.0.0.1:2080`), **Both** (TUN + local proxy), **None** (только outbounds для тестов). Отдельные поля для локального и удалённого DNS.
+
+![Config tab](dist-release/screenshots/03-config.png)
+
+### Routing — простой UX
+Два process-picker'а: **Apps via VPN** (эти программы идут через VPN) и **Apps direct** (эти всегда напрямую, обходя VPN и rule-sets). Всё остальное — в Advanced.
+
+![Routing tab — simple UX](dist-release/screenshots/04-routing.png)
+
+### Routing Advanced — полный редактор правил
+Sniff protocol, auto-detect interface, Final outbound. Custom rules (drag-and-drop, все matcher'ы sing-box). Rule-sets (Loyalsoldier / meta-rules-dat / custom URL). Starter rules в один клик (Bypass LAN, Reject IPv6, Block QUIC, Bypass CN, Bypass RU, Block Ads, Block Malware). Rule-set library с переключателем источника Loyalsoldier ↔ meta.
+
+![Routing tab — Advanced](dist-release/screenshots/05-routing-advanced.png)
 
 ---
 
