@@ -51,7 +51,7 @@ Cloakwire создаёт защищённый маршрут именно так
 
 ## 📥 Установка
 
-### Скачать готовый билд (рекомендуется)
+### Windows — скачать готовый билд (рекомендуется)
 
 Перейдите в **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)** и скачайте:
 
@@ -60,6 +60,29 @@ Cloakwire создаёт защищённый маршрут именно так
 - **`Cloakwire-1.0.x-portable.exe`** (7.4 MB) — portable, без установки
 
 > 💡 **Совет:** Windows SmartScreen может предупредить о неподписанном издателе. Нажмите "Подробнее" → "Выполнить в любом случае" — это нормально для open source без code-signing сертификата.
+
+### Linux — `.deb` для Ubuntu / Debian
+
+> ⚠️ **Linux-порт в бете** — собирается, запускается, TUN-режим работает, но без тщательного тестирования на разных DE. Жду багрепорты.
+
+Скачайте **`Cloakwire_1.0.x_amd64.deb`** (21 MB) из Releases и поставьте:
+
+```bash
+sudo apt install ./Cloakwire_1.0.x_amd64.deb
+cloakwire
+```
+
+Зависимости (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) уже есть на любом Ubuntu 22.04+ / Debian 12+ desktop. Postinst автоматически делает `setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box` — нужно для TUN-режима.
+
+Если TUN-режим всё равно не работает (например, после `apt upgrade` потерялись capabilities):
+
+```bash
+sudo setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box
+```
+
+Cloakwire сама покажет понятную ошибку с этой командой, если caps пропадут.
+
+**System Proxy** на Linux работает через `gsettings` (GNOME / MATE / Cinnamon / XFCE / Budgie / Pantheon) или `kwriteconfig5` (KDE). TUN-режим рекомендуется — он перехватывает трафик на сетевом уровне и не зависит от поддержки proxy в приложениях.
 
 ### Собрать из исходников
 
@@ -73,6 +96,45 @@ npm run tauri:build
 ```
 
 Portable exe: `src-tauri\target\release\cloakwire.exe`
+
+### Сборка `.deb` из исходников (Linux)
+
+Tauri 2 под Linux собирает `.deb` (без встроенного postinst-хука,
+поэтому наш build-скрипт добавляет `setcap` руками через `dpkg-deb`).
+Рекомендуемый путь — WSL2 на Windows или нативная Ubuntu 22.04+.
+
+```bash
+# Одноразовая настройка (Ubuntu 22.04+ / Debian 12+):
+sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+                    librsvg2-dev libayatana-appindicator3-dev patchelf \
+                    build-essential file unzip xz-utils dpkg-dev
+# rustup: https://rustup.rs (stable, 1.77+)
+# Node 20+ через nvm или apt
+
+# Клонируем:
+git clone https://github.com/markwhite7881-cpu/cloakwire.git
+cd cloakwire
+npm install
+
+# Сборка .deb (npm run tauri:build → tauri-bundler → .deb,
+# затем scripts/build-linux-deb.sh round-trip через dpkg-deb
+# чтобы вложить scripts/deb-postinst.sh как DEBIAN/postinst).
+./scripts/build-linux-deb.sh 1.0.3
+
+# Артефакты:
+#   src-tauri/target/release/bundle/deb/Cloakwire_<ver>_amd64.deb
+#   dist-release/Cloakwire_<ver>_amd64.deb (зеркалится на Windows-сторону)
+
+# Установка + smoke test:
+sudo apt install -y ./dist-release/Cloakwire_<ver>_amd64.deb
+getcap /usr/bin/sing-box
+# ожидаем: /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
+```
+
+Postinst идемпотентен — `apt upgrade` пере-запускает его, `setcap` молча
+no-op если caps уже стоят. Если caps когда-то пропадут (ручной `chmod`,
+`apt purge && apt install`, и т.п.), приложение само покажет понятную
+ошибку с командой восстановления.
 
 ---
 

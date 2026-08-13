@@ -43,7 +43,7 @@ Tauri 2 + React + TypeScript, styled after [classquiz](https://classquiz.ru).
 
 ## 📥 Install
 
-### Download a prebuilt binary (recommended)
+### Windows — download a prebuilt binary (recommended)
 
 Head to **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)** and grab:
 
@@ -52,6 +52,29 @@ Head to **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/r
 - **`Cloakwire-1.0.x-portable.exe`** (7.4 MB) — portable, no install
 
 > 💡 **Note:** Windows SmartScreen may warn about an unknown publisher. Click "More info" → "Run anyway" — this is normal for unsigned open-source apps.
+
+### Linux — `.deb` for Ubuntu / Debian
+
+> ⚠️ **Linux port is in beta** — it builds, runs, and TUN mode works, but it hasn't been exhaustively tested across desktop environments. Bug reports welcome.
+
+Grab **`Cloakwire_1.0.x_amd64.deb`** (21 MB) from Releases and install it:
+
+```bash
+sudo apt install ./Cloakwire_1.0.x_amd64.deb
+cloakwire
+```
+
+Dependencies (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) are preinstalled on any Ubuntu 22.04+ / Debian 12+ desktop. The postinst automatically runs `setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box` — required for TUN mode.
+
+If TUN mode still fails (e.g. capabilities were stripped during an `apt upgrade`):
+
+```bash
+sudo setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box
+```
+
+Cloakwire itself surfaces a clear error with this exact command when caps are missing.
+
+**System Proxy** on Linux goes through `gsettings` (GNOME / MATE / Cinnamon / XFCE / Budgie / Pantheon) or `kwriteconfig5` (KDE). TUN mode is recommended — it captures traffic at the network layer and doesn't depend on per-app proxy support.
 
 ### Build from source
 
@@ -65,6 +88,46 @@ npm run tauri:build
 ```
 
 Portable exe: `src-tauri\target\release\cloakwire.exe`
+
+### Linux development (build the `.deb` from source)
+
+Tauri 2's Linux bundle is `.deb` (Tauri 2 does not yet have a first-class
+postinst hook, so the build script injects our `setcap` postinst
+manually). Recommended path is WSL2 on Windows or a native Ubuntu 22.04+
+machine.
+
+```bash
+# One-time setup (Ubuntu 22.04+ / Debian 12+):
+sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+                    librsvg2-dev libayatana-appindicator3-dev patchelf \
+                    build-essential file unzip xz-utils dpkg-dev
+# rustup: https://rustup.rs (stable, 1.77+)
+# Node 20+ via nvm or apt
+
+# Get the source:
+git clone https://github.com/markwhite7881-cpu/cloakwire.git
+cd cloakwire
+npm install
+
+# Build the .deb (npm run tauri:build → tauri-bundler → .deb,
+# then scripts/build-linux-deb.sh round-trips through dpkg-deb
+# to inject scripts/deb-postinst.sh as DEBIAN/postinst).
+./scripts/build-linux-deb.sh 1.0.3
+
+# Artifacts:
+#   src-tauri/target/release/bundle/deb/Cloakwire_<ver>_amd64.deb
+#   dist-release/Cloakwire_<ver>_amd64.deb (mirrored to Windows-side)
+
+# Install + smoke test:
+sudo apt install -y ./dist-release/Cloakwire_<ver>_amd64.deb
+getcap /usr/bin/sing-box
+# expect: /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
+```
+
+The postinst is idempotent — `apt upgrade` re-runs it and `setcap` no-ops
+if the caps are already there. If the caps ever get stripped (manual
+`chmod`, an overzealous `apt purge && apt install`, etc.), the app
+surfaces a clear remediation error on first TUN start.
 
 ---
 

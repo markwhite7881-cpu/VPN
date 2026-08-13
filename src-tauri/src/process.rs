@@ -179,6 +179,24 @@ impl ProcessManager {
             "sing-box".to_string()
         };
 
+        // First: same directory as the running executable. On a Linux
+        // .deb install, Tauri 2 puts both the main binary and the
+        // sidecar in `/usr/bin/` (no `/usr/lib/<pkg>/binaries/`), so
+        // this is the only place to look. On Windows NSIS / MSI the
+        // same pattern holds. We do this BEFORE the `resource_dir`
+        // lookup because on Linux the resource_dir path simply does
+        // not exist.
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for name in [&exe_name, &plain_name] {
+                    let p = dir.join(name);
+                    if p.exists() {
+                        return Ok(p);
+                    }
+                }
+            }
+        }
+
         // Release: resource_dir/binaries/...
         if let Ok(resource_dir) = app.path().resource_dir() {
             for name in [&exe_name, &plain_name] {
@@ -246,6 +264,25 @@ impl ProcessManager {
         {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        // On Linux, TUN mode requires the sing-box binary itself to hold
+        // `cap_net_admin` + `cap_net_raw` (it opens `/dev/net/tun` and
+        // configures addresses / routes via netlink, all of which need
+        // admin caps). The .deb's postinst applies these via `setcap`
+        // on install, but they can be stripped by an `apt upgrade`
+        // race, a manual `chmod`, or a package re-install. Detect the
+        // situation up front and surface a clear remediation message
+        // instead of letting sing-box die with "operation not
+        // permitted" half a second later. Best-effort: missing
+        // `getcap` or a non-TUN config are no-ops.
+        if let Err(msg) = check_tun_capabilities(binary, config_path).await {
+            self.push_log(
+                LogStream::System,
+                format!("TUN capability check failed: {msg}"),
+            )
+            .await;
+            return Err(AppError::TunCapabilities(msg));
         }
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -556,12 +593,112 @@ pub fn clear_system_proxy() -> AppResult<()> {
 }
 
 #[cfg(not(windows))]
-pub fn apply_system_proxy(_host: &str, _port: u16) -> AppResult<()> {
+pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
+    // On Linux the system proxy is per-desktop-environment. We use
+    // gsettings (GNOME, MATE, Cinnamon, XFCE) and fall back to
+    // KDE's kwriteconfig if gsettings isn't available. Other DEs
+    // (raw i3, sway) don't have a system-wide proxy concept and the
+    // user is expected to configure their browser / curl / etc.
+    // manually. We log a warning for unsupported DEs and continue
+    // — the user can still point individual apps at the proxy.
+    //
+    // This is best-effort: if every approach fails, we still return
+    // Ok(()) so the rest of the start path isn't blocked. The
+    // recommendation for full traffic coverage on Linux is TUN mode
+    // (not system_proxy), which captures at the network layer
+    // rather than relying on per-app proxy support.
+    let scheme = if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+        "http"
+    } else {
+        "http"
+    };
+    let proxy_url = format!("{scheme}://{host}:{port}");
+
+    // Try gsettings (GNOME / MATE / Cinnamon / XFCE / Budgie / Pantheon).
+    let gsettings_ok = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.system.proxy", "mode", "manual"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if gsettings_ok {
+        // mode=manual succeeded — set the actual proxy endpoints.
+        let _ = std::process::Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.http", "host", host])
+            .status();
+        let _ = std::process::Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.http", "port", &port.to_string()])
+            .status();
+        let _ = std::process::Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.https", "host", host])
+            .status();
+        let _ = std::process::Command::new("gsettings")
+            .args(["set", "org.gnome.system.proxy.https", "port", &port.to_string()])
+            .status();
+        log::info!("set GNOME system proxy to {proxy_url}");
+        return Ok(());
+    }
+
+    // Try KDE (`kwriteconfig5` writes to kdeglobals; `dbus-send` to
+    // kioslave would also work but is more involved). kwriteconfig5
+    // doesn't trigger immediate re-read by running apps; users need
+    // to re-login or call `dbus-send --session --print-reply
+    // --dest=org.kde.kioslaves / kioslave5 reparseConfiguration`
+    // themselves. We still set it so newly-spawned apps pick it up.
+    let kwrite_ok = std::process::Command::new("kwriteconfig5")
+        .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if kwrite_ok {
+        let _ = std::process::Command::new("kwriteconfig5")
+            .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", &proxy_url])
+            .status();
+        let _ = std::process::Command::new("kwriteconfig5")
+            .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", &proxy_url])
+            .status();
+        log::info!("set KDE system proxy to {proxy_url} (re-login may be required)");
+        return Ok(());
+    }
+
+    // Last resort: drop a hint in the log. Per-DE and per-app proxy
+    // settings vary so much that blanket env-var writes (which only
+    // affect new processes spawned by the same shell) aren't worth
+    // silently confusing the user.
+    log::warn!(
+        "system_proxy: no gsettings and no kwriteconfig5 — cannot set a \
+         system-wide HTTP proxy on this desktop environment. Use TUN mode \
+         for full traffic coverage, or configure your apps to use \
+         {proxy_url} manually."
+    );
     Ok(())
 }
 
 #[cfg(not(windows))]
 pub fn clear_system_proxy() -> AppResult<()> {
+    // Reverse of apply_system_proxy: revert gsettings to 'none' and
+    // kwriteconfig5 to ProxyType=0. Best-effort, same caveats.
+    let gsettings_ok = std::process::Command::new("gsettings")
+        .args(["set", "org.gnome.system.proxy", "mode", "none"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if gsettings_ok {
+        log::info!("cleared GNOME system proxy");
+        return Ok(());
+    }
+    let kwrite_ok = std::process::Command::new("kwriteconfig5")
+        .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if kwrite_ok {
+        log::info!("cleared KDE system proxy");
+        return Ok(());
+    }
+    log::debug!(
+        "clear_system_proxy: no gsettings and no kwriteconfig5 on this \
+         system — nothing to clear."
+    );
     Ok(())
 }
 
@@ -660,4 +797,87 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
         let _ = config_path;
         Ok(())
     }
+}
+
+/// On Linux, TUN mode requires the sing-box binary itself to hold
+/// `cap_net_admin` + `cap_net_raw` (it opens `/dev/net/tun` and
+/// configures addresses / routes via netlink, all of which need
+/// admin caps). The .deb's postinst applies these via `setcap` on
+/// install, but they can be stripped by an `apt upgrade` race, a
+/// manual `chmod`, or a package re-install. Detect the situation up
+/// front and surface a clear remediation message instead of letting
+/// sing-box die with "operation not permitted" half a second later.
+///
+/// Best-effort: missing `getcap` (rare — comes from `libcap2-bin`)
+/// or a non-TUN config are no-ops; we only block the spawn when
+/// TUN is actually requested AND the caps are missing.
+#[cfg(target_os = "linux")]
+async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(), String> {
+    // 1) Read the config and check whether any inbound is TUN.
+    //    If not, there's nothing to verify — system_proxy and
+    //    "None" modes don't need cap_net_admin.
+    let content = tokio::fs::read_to_string(config_path)
+        .await
+        .map_err(|e| format!("read config {}: {e}", config_path.display()))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("parse config JSON: {e}"))?;
+    let has_tun = json
+        .get("inbounds")
+        .and_then(|i| i.as_array())
+        .map(|arr| {
+            arr.iter()
+                .any(|i| i.get("type").and_then(|t| t.as_str()) == Some("tun"))
+        })
+        .unwrap_or(false);
+    if !has_tun {
+        return Ok(());
+    }
+
+    // 2) `getcap` is shipped by `libcap2-bin` (optional on Debian,
+    //    standard on Ubuntu desktop). If it's not installed, fail
+    //    soft — sing-box itself will produce a clearer EPERM error
+    //    when it tries to open /dev/net/tun.
+    let output = std::process::Command::new("getcap")
+        .arg(binary)
+        .output()
+        .map_err(|e| {
+            format!(
+                "could not run `getcap` to verify TUN capabilities (is `libcap2-bin` installed?): {e}"
+            )
+        })?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // 3) `getcap` output looks like:
+    //       /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
+    //    We accept any line that mentions cap_net_admin — the
+    //    additional cap_net_raw is what TUN actually needs but
+    //    is almost always bundled together; surfacing a separate
+    //    error for "only cap_net_admin is set" would be
+    //    over-engineering for a one-line check.
+    if stdout.contains("cap_net_admin") {
+        log::info!(
+            "sing-box {} has cap_net_admin — TUN mode is ready",
+            binary.display()
+        );
+        return Ok(());
+    }
+
+    Err(format!(
+        "TUN mode needs CAP_NET_ADMIN (and CAP_NET_RAW) on the sing-box binary, but \
+         `{}` doesn't have them. Reinstall the .deb (its postinst applies these caps \
+         automatically) or run manually:\n  \
+         sudo setcap cap_net_admin,cap_net_raw=+ep {}\n  \
+         getcap stdout: {}\n  \
+         getcap stderr: {}",
+        binary.display(),
+        binary.display(),
+        stdout.trim(),
+        stderr.trim(),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn check_tun_capabilities(_binary: &Path, _config_path: &Path) -> Result<(), String> {
+    Ok(())
 }

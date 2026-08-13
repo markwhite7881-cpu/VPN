@@ -22,6 +22,13 @@ pub enum AppError {
     #[error("failed to spawn sing-box: {0}")]
     Spawn(String),
 
+    /// The sing-box binary is missing the Linux capabilities it needs
+    /// for TUN mode (`cap_net_admin` + `cap_net_raw`). The message
+    /// already contains the exact `setcap` command the user can run
+    /// to recover, so the frontend just needs to surface it.
+    #[error("sing-box missing TUN capabilities: {0}")]
+    TunCapabilities(String),
+
     #[error("failed to write config file: {0}")]
     WriteConfig(String),
 
@@ -56,6 +63,7 @@ impl Serialize for AppError {
             AppError::AlreadyRunning(_) => ("already_running", self.to_string()),
             AppError::BinaryNotFound(_) => ("binary_not_found", self.to_string()),
             AppError::Spawn(_) => ("spawn", self.to_string()),
+            AppError::TunCapabilities(_) => ("tun_capabilities", self.to_string()),
             AppError::WriteConfig(_) => ("write_config", self.to_string()),
             AppError::Parse(e) => {
                 // The parser already has a structured kind+message; flatten
