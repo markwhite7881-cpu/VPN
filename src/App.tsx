@@ -5,10 +5,10 @@ import {
   Power,
   Route,
   Settings2,
-  ShieldCheck,
   Terminal,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import cloakwireLogo from "@/assets/cloakwire-logo.png";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
 import { StatusPill } from "@/components/StatusPill";
@@ -947,8 +947,12 @@ export default function App() {
       {/* Header — single slim row, brand + status + controls. */}
       <header className="relative z-10 flex shrink-0 items-center justify-between border-b border-border bg-card/40 px-6 py-2.5 backdrop-blur">
         <div className="flex items-center gap-3">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 ring-1 ring-primary/30">
-            <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+          <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-md bg-primary/15 ring-1 ring-primary/30">
+            <img
+              src={cloakwireLogo}
+              alt="Cloakwire"
+              className="h-5 w-5"
+            />
           </div>
           <div>
             <div className="flex items-center gap-2">
