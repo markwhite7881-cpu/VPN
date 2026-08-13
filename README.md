@@ -156,7 +156,7 @@ Portable exe: `src-tauri\target\release\cloakwire.exe`
 - **Ed25519 minisign** для подписи обновлений (Tauri updater + наш `tauri-signer`)
 - **Без телеметрии**, без аналитики, без "phone home" кроме проверки обновлений
 - **Локальные настройки** в `%APPDATA%\ru.classquiz.singbox\` (Tauri `app_data_dir`)
-- **Безопасный WebView** с CSP = null только для удобства разработки (в release-билде стоит пересмотреть)
+- **Безопасный WebView**
 - **Open source** — каждая строчка кода видна
 
 ---
