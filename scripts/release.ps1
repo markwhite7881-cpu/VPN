@@ -86,22 +86,26 @@ foreach ($item in $items) {
     $filePath = $item.FullName
     Write-Host "    signing $filePath..." -ForegroundColor DarkCyan
     # Our local tauri-signer writes `<file>.sig` next to the file
-    # in the standard minisign format (no password prompt — the
-    # tauri-generated key file uses KDF with empty passphrase, and
-    # the tauri-signer binary passes `Some("")` accordingly).
+    # in the standard 4-line minisign format (no password prompt —
+    # the tauri-generated key file uses KDF with empty passphrase,
+    # and the tauri-signer binary passes `Some("")` accordingly).
     & $SignerExe -k $KeyPath $filePath 2>&1 | Select-Object -Last 3
     $sigPath = "$filePath.sig"
     if (-not (Test-Path $sigPath)) {
         Write-Host "ERROR: signature file not produced for $filePath" -ForegroundColor Red
         exit 1
     }
-    # Standard minisign signature file: 4 lines, alternating
-    # comment / payload. Line 1 is the untrusted comment, line 2
-    # is the Ed25519 signature, line 3 is the trusted comment,
-    # line 4 is the trusted-payload signature. The Rust verifier
-    # wants only line 2.
-    $sigLines = (Get-Content $sigPath -Encoding UTF8)
-    $sigB64 = ($sigLines | Select-Object -Skip 1 -First 1).Trim()
+    # The manifest's `signature` field is `base64(<.sig file content>)`,
+    # not `base64(<inner 64-byte Ed25519 sig>)` and not
+    # `base64(<74-byte minisign sig blob>)`. tauri-plugin-updater's
+    # `verify_signature` base64-decodes the field back to a string
+    # and hands it to `minisign_verify::Signature::decode`, which
+    # expects the full multi-line .sig file content. This is the
+    # same encoding `npx tauri signer sign` produces (see
+    # tauri-cli/src/signer/sign.rs: `base64::encode(sig.to_string())`).
+    $sigText = (Get-Content $sigPath -Raw -Encoding UTF8)
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    $sigB64 = [Convert]::ToBase64String($utf8.GetBytes($sigText))
     $fileName = [System.IO.Path]::GetFileName($filePath)
     $url = "https://github.com/markwhite7881-cpu/cloakwire/releases/download/v$Version/$fileName"
     $signatures["windows-x86_64"] = @{ url = $url; signature = $sigB64 }
