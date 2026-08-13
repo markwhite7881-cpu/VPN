@@ -4,7 +4,7 @@ version = "1.0.1"
 description = "Cloakwire — privacy-first GUI VPN client built on top of sing-box"
 authors = ["Alexey"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/markwhite7881-cpu/cloakwire"
 edition = "2021"
 rust-version = "1.77"
 

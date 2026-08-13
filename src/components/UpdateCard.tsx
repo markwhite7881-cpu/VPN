@@ -4,7 +4,7 @@
 //      with the project's `tauri-updater.key`. The frontend uses
 //      `@tauri-apps/plugin-updater` directly — no Rust command in
 //      between. The manifest lives at
-//      `https://github.com/markwhite7881-cpu/VPN/releases/latest/
+//      `https://github.com/markwhite7881-cpu/cloakwire/releases/latest/
 //      download/latest.json` (see tauri.conf.json).
 //
 //   2. sing-box core (custom Rust commands, see src-tauri/src/

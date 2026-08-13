@@ -103,7 +103,7 @@ foreach ($item in $items) {
     $sigLines = (Get-Content $sigPath -Encoding UTF8)
     $sigB64 = ($sigLines | Select-Object -Skip 1 -First 1).Trim()
     $fileName = [System.IO.Path]::GetFileName($filePath)
-    $url = "https://github.com/markwhite7881-cpu/VPN/releases/download/v$Version/$fileName"
+    $url = "https://github.com/markwhite7881-cpu/cloakwire/releases/download/v$Version/$fileName"
     $signatures["windows-x86_64"] = @{ url = $url; signature = $sigB64 }
     $artifacts += $filePath
 }

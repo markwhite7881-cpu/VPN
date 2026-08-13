@@ -1,4 +1,4 @@
-> **Note**: v1.0.0 was the last release under the "Singbox Client" name. The project has been renamed to **Cloakwire** as of v1.0.1 — see https://github.com/markwhite7881-cpu/VPN/releases/tag/v1.0.1. The v1.0.0 → v1.0.1 transition is an in-place upgrade (same `identifier`); no uninstall / reinstall needed.
+> **Note**: v1.0.0 was the last release under the "Singbox Client" name. The project has been renamed to **Cloakwire** as of v1.0.1 — see https://github.com/markwhite7881-cpu/cloakwire/releases/tag/v1.0.1. The v1.0.0 → v1.0.1 transition is an in-place upgrade (same `identifier`); no uninstall / reinstall needed. The GitHub repo was renamed from `VPN` to `cloakwire` shortly after v1.0.1 shipped; old `VPN` URLs still redirect.
 
 ## v1.0.0 - first stable release
 

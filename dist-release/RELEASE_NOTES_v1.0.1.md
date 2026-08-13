@@ -5,7 +5,7 @@ This is the first release under the **Cloakwire** name. v1.0.0 is the last relea
 ## What's new
 - **New app icon** — the Cloakwire logo (a hooded cloak with a wifi signal inside) is now the icon everywhere: window, taskbar, installer, MSI/NSIS shortcuts. The logo was supplied by the user; we removed the black background with `rembg` so the icon blends with any Windows theme.
 - **Brand rename** — product name, window title, header, and all user-facing strings now say "Cloakwire". The Rust package is now `cloakwire` and the binary is now `cloakwire.exe`.
-- **Tauri auto-updater is live** — existing v1.0.0 installs will see v1.0.1 in the Home tab and can install + restart with one click. Manifest URL: `https://github.com/markwhite7881-cpu/VPN/releases/latest/download/latest.json`.
+- **Tauri auto-updater is live** — existing v1.0.0 installs will see v1.0.1 in the Home tab and can install + restart with one click. Manifest URL: `https://github.com/markwhite7881-cpu/cloakwire/releases/latest/download/latest.json`.
 - **sing-box core auto-updater is live** — v1.0.1+ can pull newer sing-box binaries from GitHub without re-installing the app. The new binary lands in `%LOCALAPPDATA%\ru.classquiz.singbox\singbox-runtime\sing-box.exe` and is picked up by `ProcessManager::locate_binary` on the next start.
 
 ## Why 1.0.1, not 2.0
