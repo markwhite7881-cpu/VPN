@@ -468,7 +468,7 @@ pub async fn lookup_geoip(ips: Vec<String>) -> AppResult<Vec<(String, String)>> 
         .collect::<Vec<_>>());
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(6))
-        .user_agent("singbox-client/0.1")
+        .user_agent("cloakwire/0.1")
         .build()
         .map_err(|e| AppError::Clash(format!("http client: {e}")))?;
     // `system` resolver is fine for a hostname like ip-api.com that
@@ -581,7 +581,7 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<bool> {
 pub async fn fetch_subscription(url: String) -> AppResult<ParseLinksResult> {
     let body = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "singbox-client/0.1")
+        .header("User-Agent", "cloakwire/0.1")
         .send()
         .await
         .map_err(|e| AppError::Clash(format!("subscription fetch failed: {e}")))?

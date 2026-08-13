@@ -29,7 +29,7 @@ use process::ProcessManager;
 pub fn run() {
     // Best-effort logger init. RUST_LOG=info turns it on by default.
     let _ = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,singbox_client_lib=debug"),
+        env_logger::Env::default().default_filter_or("info,cloakwire_lib=debug"),
     )
     .try_init();
 

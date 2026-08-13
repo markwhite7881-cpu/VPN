@@ -56,9 +56,9 @@ const RELEASES_LATEST_URL: &str =
     "https://api.github.com/repos/SagerNet/sing-box/releases/latest";
 
 /// User-Agent sent to GitHub. They ask for a meaningful UA on
-/// unauthenticated API calls; "singbox-client" identifies us and
+/// unauthenticated API calls; "cloakwire" identifies us and
 /// the version helps debugging on their side.
-const USER_AGENT: &str = concat!("singbox-client/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("cloakwire/", env!("CARGO_PKG_VERSION"));
 
 /// What `check_singbox_update` returns. The frontend shows
 /// "v1.14.0 → v1.15.0 available" if `available` is true.
@@ -194,7 +194,7 @@ pub async fn apply_singbox_update(
     }
 
     // 2) Download the .zip to a temp file in the system temp dir.
-    let tmp_dir = std::env::temp_dir().join("singbox-client-update");
+    let tmp_dir = std::env::temp_dir().join("cloakwire-update");
     std::fs::create_dir_all(&tmp_dir)?;
     let zip_path = tmp_dir.join("update.zip");
 

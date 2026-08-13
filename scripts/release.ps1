@@ -95,11 +95,13 @@ foreach ($item in $items) {
         Write-Host "ERROR: signature file not produced for $filePath" -ForegroundColor Red
         exit 1
     }
-    # Standard minisign signature file: 2 "untrusted comment" lines
-    # framing 2 base64 lines. The Rust verifier wants only the second
-    # base64 line (the Ed25519 signature).
+    # Standard minisign signature file: 4 lines, alternating
+    # comment / payload. Line 1 is the untrusted comment, line 2
+    # is the Ed25519 signature, line 3 is the trusted comment,
+    # line 4 is the trusted-payload signature. The Rust verifier
+    # wants only line 2.
     $sigLines = (Get-Content $sigPath -Encoding UTF8)
-    $sigB64 = ($sigLines | Select-Object -Skip 2 -First 1).Trim()
+    $sigB64 = ($sigLines | Select-Object -Skip 1 -First 1).Trim()
     $fileName = [System.IO.Path]::GetFileName($filePath)
     $url = "https://github.com/markwhite7881-cpu/VPN/releases/download/v$Version/$fileName"
     $signatures["windows-x86_64"] = @{ url = $url; signature = $sigB64 }
