@@ -1,6 +1,6 @@
 [package]
 name = "singbox-client"
-version = "0.3.0"
+version = "1.0.0"
 description = "Cross-platform GUI VPN client built on top of sing-box"
 authors = ["Alexey"]
 license = "MIT"
