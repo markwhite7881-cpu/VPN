@@ -205,12 +205,26 @@ impl Config {
                 // expects from "Auto (best latency)".
                 "interval": "30s",
                 "tolerance": 0,
-                // Drop the current member from the running set
-                // when we switch, so half-open connections
-                // through the now-slower server get re-opened on
-                // the new one instead of dragging out a slow
-                // tail. Without this the switch is mostly
-                // cosmetic for already-open sockets.
+                // Drop the current member from the running set when
+                // the urltest picks a faster server, so half-open
+                // connections through the now-slower server get
+                // re-opened on the new one instead of dragging out
+                // a slow tail. Without this flag the switch is
+                // mostly cosmetic for already-open sockets — the
+                // old server keeps serving the stale streams.
+                //
+                // Note: this flag was temporarily set to `false`
+                // while debugging an unrelated DNS issue (the TUN
+                // interface's auto-derived DNS server landed inside
+                // the same /30 as the TUN address, so Windows
+                // treated it as an on-link neighbour and never
+                // actually sent the packets — see the OS-level DNS
+                // fix in `process.rs` that explicitly sets
+                // `netsh interface ip set dns` for the TUN
+                // interface). With the TUN-DNS bug fixed, this
+                // flag is safe to keep on and we want it on: the
+                // urltest is supposed to actually migrate traffic
+                // when a faster server appears.
                 "interrupt_exist_connections": true,
             }));
         }
@@ -663,6 +677,178 @@ mod tests {
             .any(|r| r.get("network") == Some(&json!("dns"))));
         // Sniff action (since sniff=true by default)
         assert!(rules.iter().any(|r| r.get("action") == Some(&json!("sniff"))));
+    }
+
+    #[test]
+    fn tun_dns_server_is_outside_tun_subnet() {
+        // Regression test for the TUN-DNS bug: Windows auto-derives a
+        // DNS server from the TUN's own /30 (e.g. 172.19.0.1/30 →
+        // 172.19.0.2) and treats it as an on-link neighbour — ARP
+        // never succeeds, every direct DNS call hangs. The fix is
+        // OS-level (see `process::set_tun_dns_from_config`), but we
+        // also want the *configured* DNS server to be far away from
+        // the TUN's address range, so the sing-box-side `dns.servers`
+        // block never accidentally agrees with the auto-derived
+        // value.
+        //
+        // The actual mechanism: assert that the IPv4 address of
+        // `dns.servers[0]` is NOT inside the IPv4 network of the
+        // TUN's first `address` field (the one that the wintun
+        // driver will land in), and likewise for IPv6 / /126.
+        //
+        // Use Tun mode explicitly — the GeneratorSettings default is
+        // SystemProxy, which has no TUN inbound at all.
+        let s = GeneratorSettings {
+            tunnel_mode: TunnelMode::Tun,
+            ..GeneratorSettings::default()
+        };
+        let cfg = Config::build(&fixture_outbounds(), &s);
+
+        // 1) extract the TUN's IPv4 /30 and IPv6 /126.
+        let tun_addr = cfg["inbounds"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|i| i.get("type") == Some(&json!("tun"))))
+            .and_then(|i| i.get("address"))
+            .and_then(|a| a.as_array())
+            .expect("tun inbound has address[]");
+
+        let v4_str = tun_addr[0].as_str().expect("tun ipv4 cidr");
+        let v6_str = tun_addr[1].as_str().expect("tun ipv6 cidr");
+        let (tun_v4, prefix_v4) = parse_cidr_v4(v4_str);
+        let (tun_v6, prefix_v6) = parse_cidr_v6(v6_str);
+
+        // 2) extract the local DNS server.
+        let local_dns = cfg["dns"]["servers"]
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|s| s.get("server"))
+            .and_then(|s| s.as_str())
+            .expect("dns.servers[0].server is a string")
+            .to_string();
+
+        // 3) assert it is outside the TUN's /30. The default
+        // `77.88.8.8` (Yandex DNS) is obviously outside
+        // `172.19.0.0/30`, and this test will catch a regression
+        // where someone accidentally reverts the default to
+        // `223.5.5.5` (which is also outside, but a different
+        // class of problem) or worse to something like
+        // `172.19.0.2` (which would put the DNS server *inside*
+        // the TUN's own /30 and re-create the original bug at
+        // the sing-box level).
+        let dns_v4 = parse_ipv4(&local_dns).unwrap_or_else(|| {
+            panic!("local DNS {local_dns} should be an IPv4 literal")
+        });
+        assert!(
+            !same_subnet_v4(tun_v4, prefix_v4, dns_v4, 32),
+            "local DNS {local_dns} must NOT be in TUN IPv4 {v4_str} (auto-derivation bug)"
+        );
+
+        // 4) if the local DNS happens to be IPv6 (it isn't today,
+        // but a future default could be), also assert it's not in
+        // the TUN's /126.
+        if let Some(dns_v6) = parse_ipv6(&local_dns) {
+            assert!(
+                !same_subnet_v6(tun_v6, prefix_v6, dns_v6, 128),
+                "local DNS {local_dns} must NOT be in TUN IPv6 {v6_str}"
+            );
+        }
+    }
+
+    // ---- CIDR helpers used by `tun_dns_server_is_outside_tun_subnet` --
+
+    /// Parse `a.b.c.d/n` into `(u32 address, u8 prefix)`. Host-order.
+    fn parse_cidr_v4(s: &str) -> (u32, u8) {
+        let (ip, prefix) = s.split_once('/').expect("cidr has /");
+        let p: u8 = prefix.parse().expect("prefix parses");
+        let addr = parse_ipv4(ip).expect("ipv4 parses");
+        (addr, p)
+    }
+
+    /// Parse `a.b.c.d` into a host-order u32. Returns `None` on
+    /// malformed input (e.g. an IPv6 literal).
+    fn parse_ipv4(s: &str) -> Option<u32> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        let mut out: u32 = 0;
+        for p in parts {
+            let n: u32 = p.parse().ok()?;
+            if n > 255 {
+                return None;
+            }
+            out = (out << 8) | n;
+        }
+        Some(out)
+    }
+
+    /// `true` if `addr` is in `net/prefix`. Both addresses are
+    /// host-order u32.
+    fn same_subnet_v4(net: u32, prefix: u8, addr: u32, _addr_prefix: u8) -> bool {
+        if prefix == 0 {
+            return true;
+        }
+        let mask = if prefix >= 32 { u32::MAX } else { u32::MAX << (32 - prefix) };
+        (net & mask) == (addr & mask)
+    }
+
+    /// Parse `a:b:c:d:e:f:g:h/n` into `(u128 address, u8 prefix)`.
+    fn parse_cidr_v6(s: &str) -> (u128, u8) {
+        let (ip, prefix) = s.split_once('/').expect("cidr has /");
+        let p: u8 = prefix.parse().expect("prefix parses");
+        let addr = parse_ipv6(ip).expect("ipv6 parses");
+        (addr, p)
+    }
+
+    /// Parse an IPv6 literal into a u128 (host-order). No zone IDs,
+    /// no embedded IPv4 — the TUN's `fdfe:dcba:9876::1/126` literal
+    /// doesn't need either, and Yandex's `77.88.8.8` doesn't even
+    /// reach this function.
+    fn parse_ipv6(s: &str) -> Option<u128> {
+        if s.contains(':') == false {
+            return None;
+        }
+        // split on `::` once: head groups + tail groups
+        let (head, tail) = match s.split_once("::") {
+            Some((h, t)) => (h, Some(t)),
+            None => (s, None),
+        };
+        let head_groups: Vec<u16> = if head.is_empty() {
+            Vec::new()
+        } else {
+            head.split(':').map(|g| u16::from_str_radix(g, 16).ok()).collect::<Option<_>>()?
+        };
+        let tail_groups: Vec<u16> = match tail {
+            Some(t) if !t.is_empty() => {
+                t.split(':').map(|g| u16::from_str_radix(g, 16).ok()).collect::<Option<_>>()?
+            }
+            _ => Vec::new(),
+        };
+        let total = head_groups.len() + tail_groups.len();
+        if total > 8 {
+            return None;
+        }
+        let mut out: u128 = 0;
+        for g in head_groups {
+            out = (out << 16) | g as u128;
+        }
+        let fill = 8 - total;
+        out <<= fill * 16;
+        for g in tail_groups {
+            out = (out << 16) | g as u128;
+        }
+        Some(out)
+    }
+
+    /// `true` if `addr` is in `net/prefix`. Both addresses are
+    /// host-order u128.
+    fn same_subnet_v6(net: u128, prefix: u8, addr: u128, _addr_prefix: u8) -> bool {
+        if prefix == 0 {
+            return true;
+        }
+        let shift = 128 - prefix as u32;
+        let mask = if shift >= 128 { 0u128 } else { u128::MAX << shift };
+        (net & mask) == (addr & mask)
     }
 
     #[test]

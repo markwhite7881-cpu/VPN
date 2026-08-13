@@ -238,6 +238,32 @@ impl ProcessManager {
         })?;
         let pid = child.id();
 
+        // After sing-box brings the TUN interface up, explicitly assign
+        // the OS-level DNS server on that interface. Without this,
+        // Windows auto-derives a DNS server from the TUN's own address
+        // range (e.g. 172.19.0.1/30 → 172.19.0.2), treats it as an
+        // on-link neighbour, and tries ARP/Neighbor Discovery instead
+        // of routing — the ARP never succeeds, the DNS query never
+        // reaches sing-box, and `Resolve-DnsName` (or any direct DNS
+        // call by an app) hangs until timeout. Setting an external IP
+        // (e.g. 77.88.8.8) as the adapter's DNS server forces
+        // Windows to route the query normally through the TUN →
+        // sing-box → upstream.
+        //
+        // We fire-and-forget this on a separate task with a small
+        // delay so it doesn't block sing-box's own startup, and so
+        // the TUN interface has time to be created by the kernel
+        // driver before we try to mutate it.
+        let config_path_for_dns = config_path.to_path_buf();
+        tokio::spawn(async move {
+            // TUN creation typically takes < 100 ms on Windows;
+            // 500 ms is a safe margin without making the user wait.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if let Err(e) = set_tun_dns_from_config(&config_path_for_dns).await {
+                log::warn!("failed to set TUN adapter DNS: {e}");
+            }
+        });
+
         // Wire stdout/stderr into the log buffer.
         if let Some(stdout) = child.stdout.take() {
             let me = Arc::clone(self);
@@ -522,4 +548,101 @@ pub fn apply_system_proxy(_host: &str, _port: u16) -> AppResult<()> {
 #[cfg(not(windows))]
 pub fn clear_system_proxy() -> AppResult<()> {
     Ok(())
+}
+
+
+// --- TUN adapter DNS (Windows only) --------------------------------
+//
+// After sing-box brings the TUN interface up, the OS auto-derives a
+// DNS server address from the TUN's own address range (e.g. for
+// 172.19.0.1/30 it picks 172.19.0.2). Because that address is in the
+// same /30 as the TUN itself, Windows treats it as an on-link
+// neighbour and tries ARP/Neighbor Discovery instead of routing —
+// the ARP never succeeds, the DNS query never reaches sing-box, and
+// apps that resolve names directly (e.g. PowerShell's
+// `Resolve-DnsName` without `-Server`) hang on the call.
+//
+// Fix: explicitly set the TUN adapter's DNS server to an external
+// IP (e.g. 77.88.8.8, the same upstream we use in the sing-box
+// `dns.servers[0]` block). That IP is NOT in 172.19.0.0/30, so
+// Windows routes the DNS query normally through the TUN → sing-box
+// → upstream, and the whole resolution path works end-to-end.
+//
+// On macOS and Linux this is a no-op: the TUN device on those
+// platforms doesn't auto-derive a DNS server, so the bug doesn't
+// occur.
+
+/// Read the sing-box config we just wrote, find the TUN interface
+/// name and the local-DNS server, and apply that DNS server to the
+/// adapter at the OS level.
+///
+/// Best-effort: returns `Err` on any failure (missing fields, netsh
+/// not available, etc.) — the caller logs the error and continues.
+async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let content = tokio::fs::read_to_string(config_path)
+            .await
+            .map_err(|e| format!("read config {config_path:?}: {e}"))?;
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|e| format!("parse config JSON: {e}"))?;
+
+        // Pull the local-DNS server out of `dns.servers[0]`. Falls back
+        // to 1.1.1.1 if for any reason the field is missing (e.g. a
+        // hand-edited config) — the goal here is "any reachable IP
+        // outside the TUN's own /30", not "a specific provider".
+        let dns = json
+            .get("dns")
+            .and_then(|d| d.get("servers"))
+            .and_then(|s| s.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|s| s.get("server"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("1.1.1.1")
+            .to_string();
+
+        // Pull the TUN interface name. Default matches the generator
+        // (`build_inbounds` in `config::mod`).
+        let interface = json
+            .get("inbounds")
+            .and_then(|i| i.as_array())
+            .and_then(|arr| arr.iter().find(|i| i.get("type").and_then(|t| t.as_str()) == Some("tun")))
+            .and_then(|i| i.get("interface_name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("singbox-tun")
+            .to_string();
+
+        // `netsh interface ip set dns "<iface>" static <ip> primary`
+        // requires elevation. The whole app is already running as
+        // admin (TUN needs it), so this should just work.
+        let output = std::process::Command::new("netsh")
+            .args([
+                "interface", "ip", "set", "dns",
+                &interface,
+                "static",
+                &dns,
+                "primary",
+            ])
+            .output()
+            .map_err(|e| format!("spawn netsh: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return Err(format!(
+                "netsh exit {:?}: stderr={} stdout={}",
+                output.status.code(),
+                stderr.trim(),
+                stdout.trim()
+            ));
+        }
+        log::info!("set TUN adapter '{interface}' DNS to {dns}");
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = config_path;
+        Ok(())
+    }
 }
