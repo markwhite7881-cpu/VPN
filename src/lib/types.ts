@@ -268,6 +268,24 @@ export interface RoutingOptions {
   rules: CustomRule[];
   /** External rule-sets (Loyalsoldier / meta-rules-dat / custom URL). */
   rule_sets: CustomRuleSet[];
+  /**
+   * Process names (e.g. `"telegram.exe"`, `"chrome"`) that should
+   * route through the VPN. Synthesised as a `process_name` rule
+   * that matches FIRST in the generated `route.rules` (before
+   * anything in `rules[]`). Empty by default.
+   *
+   * The default outbound for matched traffic is `auto` (urltest
+   * picks the fastest server), so the user doesn't need to pin a
+   * specific server.
+   */
+  vpn_processes: string[];
+  /**
+   * Process names that should bypass the VPN (go direct). Same
+   * shape as `vpn_processes` but synthesised as a rule that
+   * routes to `direct`. Matches FIRST so a process can't be in
+   * both lists (the more specific "direct" wins). Empty by default.
+   */
+  direct_processes: string[];
   /** Always-on sniff action pushed at the top of `route.rules`. */
   sniff: boolean;
   /** `route.final` outbound tag. */
