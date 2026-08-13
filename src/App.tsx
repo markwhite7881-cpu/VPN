@@ -20,6 +20,7 @@ import { ConfigTab } from "@/components/ConfigTab";
 import { RoutingTab } from "@/components/routing/RoutingTab";
 import { TauriCommandError, api } from "@/lib/api";
 import { DEFAULT_SETTINGS } from "@/lib/defaults";
+import { loadManualProfiles, saveManualProfiles } from "@/lib/manualProfiles";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useGeoIp } from "@/hooks/useGeoIp";
 import { isSupported } from "@/lib/outbound";
@@ -282,7 +283,7 @@ export default function App() {
   // Parsed profiles — split into manual + subscription entries
   // so subscription auto-refresh only replaces the slots owned
   // by a particular subscription.
-  const [manualProfiles, setManualProfiles] = useState<Outbound[]>([]);
+  const [manualProfiles, setManualProfiles] = useState<Outbound[]>(() => loadManualProfiles());
   const [pendingLinks, setPendingLinks] = useState<string>("");
   const [parseErrors, setParseErrors] = useState<ParseFailure[]>([]);
   const [parsing, setParsing] = useState(false);
@@ -302,6 +303,16 @@ export default function App() {
       /* quota exceeded or storage disabled — ignore */
     }
   }, [settings]);
+
+  // Persist manual profiles every time they change. Subscriptions
+  // are already persisted in `useSubscriptions`; this is the
+  // matching hook for hand-pasted links (`vless://...`). Without
+  // this, the user has to re-paste every time they restart the
+  // app — which is a real UX gap for a regular user who only
+  // uses manual links.
+  useEffect(() => {
+    saveManualProfiles(manualProfiles);
+  }, [manualProfiles]);
 
   // Subscriptions.
   const subs = useSubscriptions();

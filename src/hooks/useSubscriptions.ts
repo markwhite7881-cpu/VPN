@@ -140,6 +140,33 @@ export function useSubscriptions() {
     };
   }, [subs, refreshOne]);
 
+  // One-shot fetch on app start: subscription URLs are persisted,
+  // but the parsed `lastResult` is React state and goes away on
+  // every relaunch. The auto-refresh tick above only re-fetches
+  // subs that are "due" (intervalMinutes since lastFetchedAt) — so
+  // a sub fetched 5 minutes before launch won't be re-fetched, and
+  // the server list stays empty until the interval passes.
+  //
+  // For a "fresh launch" UX we always kick off one fetch per sub
+  // on mount, regardless of how recent the last fetch was. The
+  // network call is cheap (a single GET) and the UI shows a
+  // `fetching` indicator per sub so the user knows it's in flight.
+  // If a user wants a true "offline mode" they can set
+  // `intervalMinutes = 0` on the subscription.
+  useEffect(() => {
+    if (subs.length === 0) return;
+    subs.forEach((s) => {
+      // refreshOne updates state; we don't await — UI shows the
+      // fetching indicator.
+      void refreshOne(s.id);
+    });
+    // Intentionally depend only on `subs.length` (not the full
+    // array): we want to fire once on first mount and not re-fire
+    // when the auto-refresh tick mutates `subs` (e.g. updates
+    // lastFetchedAt). A length change means a real add/remove.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subs.length]);
+
   const add = useCallback(
     (input: { name?: string; url: string; intervalMinutes?: number }) => {
       const id = makeId();
