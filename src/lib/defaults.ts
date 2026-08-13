@@ -20,20 +20,24 @@ export const DEFAULT_SETTINGS: GeneratorSettings = {
     rule_sets: [],
     // "Simple" Routing-tab UX writes here. Empty by default — a
     // brand-new user opens the Routing tab, sees two pickers, picks
-    // a few .exe names, done. Anything not picked goes direct (the
-    // safe default; matches the questionnaire answer "Всё напрямую
-    // кроме selected").
+    // a few .exe names, done. With `final_outbound: "proxy"` (the
+    // v1.0 default), the user can flip specific apps to direct via
+    // the "Apps direct" picker, which is the mental model every
+    // existing user had. The simple-UX commit briefly switched the
+    // default to `"direct"` so the "Apps via VPN" picker would be
+    // meaningful, but that inverted the model from "VPN for
+    // everything, except ..." to "VPN for nothing, except ..." and
+    // broke every existing user — they opened the app, clicked
+    // Connect, and watched all their traffic go direct.
     vpn_processes: [],
     direct_processes: [],
     sniff: true,
-    // `direct` (not `proxy`) is the right default for the
-    // "simple" UX: by default, all traffic is direct, and the user
-    // opts IN to VPN by adding apps to "Apps via VPN" above. If the
-    // default were `proxy`, the picker would be a no-op (everything
-    // is already via proxy), and the user's "I picked Telegram" would
-    // mysteriously mean "I picked Telegram and now Chrome is also
-    // going via VPN".
-    final_outbound: "direct",
+    // `proxy` (not `direct`) — the v1.0 default. The simple-UX
+    // pickers still work: an entry in `direct_processes` synthesises
+    // a `process_name → direct` rule that matches FIRST (more
+    // specific than the implicit `final: proxy` for everything
+    // else).
+    final_outbound: "proxy",
     auto_detect_interface: true,
     default_domain_resolver: "local",
   },

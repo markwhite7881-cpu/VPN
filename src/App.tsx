@@ -194,16 +194,18 @@ function migrateRoutingV1ToV2(v1: RoutingOptionsV1): RoutingOptions {
     rules,
     rule_sets: ruleSets,
     // `migrateRoutingV1ToV2` only knows about boolean flags → rule
-    // objects. The new "simple" process-picker arrays are always
-    // empty after a v1 migration; users will populate them on the
-    // Routing tab. `final_outbound` is preserved from v1 so the
-    // migration is behaviour-preserving (existing v0.1.0 users who
-    // had `final_outbound: "proxy"` keep that — the new default of
-    // `direct` only applies to first-time v0.3.1+ installs).
+    // objects. The "simple" process-picker arrays are always empty
+    // after a v1 migration; users populate them on the Routing tab.
+    // `final_outbound` is preserved from v1 so the migration is
+    // behaviour-preserving (existing v0.1.0 users who had
+    // `final_outbound: "proxy"` keep that). The post-merge migration
+    // in `loadSettings` will additionally flip a stale `"direct"`
+    // back to `"proxy"` for the case where the user never set it
+    // explicitly but inherited the broken simple-UX default.
     vpn_processes: [],
     direct_processes: [],
     sniff: true,
-    final_outbound: v1.final_outbound || "direct",
+    final_outbound: v1.final_outbound || "proxy",
     auto_detect_interface: true,
     default_domain_resolver: "local",
   };
@@ -216,12 +218,35 @@ function loadSettings(): GeneratorSettings {
     const rawV2 = window.localStorage.getItem(SETTINGS_KEY);
     if (rawV2) {
       const parsed = JSON.parse(rawV2);
-      return {
+      const merged: GeneratorSettings = {
         ...DEFAULT_SETTINGS,
         ...parsed,
         routing: { ...DEFAULT_SETTINGS.routing, ...(parsed.routing ?? {}) },
         clash_api: { ...DEFAULT_SETTINGS.clash_api, ...(parsed.clash_api ?? {}) },
       };
+      // Migration: the simple-UX commit (123e450) flipped the default
+      // `final_outbound` from "proxy" to "direct", which inverted the
+      // model from "VPN for everything, except apps in Apps direct"
+      // to "VPN for nothing, except apps in Apps via VPN". Every
+      // existing user opened the app, clicked Connect, and watched all
+      // their traffic go direct. If we see `direct` AND the user has
+      // no signs of intent (no pickers, no rules, no rule-sets), it
+      // was almost certainly the broken default and not a choice —
+      // flip it back to "proxy" and persist.
+      const r = merged.routing;
+      if (
+        r.final_outbound === "direct" &&
+        r.vpn_processes.length === 0 &&
+        r.direct_processes.length === 0 &&
+        r.rules.length === 0 &&
+        r.rule_sets.length === 0
+      ) {
+        merged.routing = { ...r, final_outbound: "proxy" };
+        try {
+          window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
+        } catch { /* ignore */ }
+      }
+      return merged;
     }
     // Fall back to v1 (silent migration).
     const rawV1 = window.localStorage.getItem(SETTINGS_KEY_V1);
@@ -960,7 +985,7 @@ export default function App() {
                 Cloakwire
               </h1>
               <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                v1.0.2
+                v1.0.3
               </Badge>
             </div>
             <p className="text-[11px] text-muted-foreground">

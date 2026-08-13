@@ -457,7 +457,10 @@ const DEFAULT_ROUTING: RoutingOptions = {
   vpn_processes: [],
   direct_processes: [],
   sniff: true,
-  final_outbound: "direct",
+  // "proxy" — matches the v1.0 behaviour and the canonical DEFAULT_SETTINGS
+  // in src/lib/defaults.ts. Resetting routing means "give me the v1.0
+  // baseline" (VPN for everything, except apps I add to Apps direct).
+  final_outbound: "proxy",
   auto_detect_interface: true,
   default_domain_resolver: "local",
 };

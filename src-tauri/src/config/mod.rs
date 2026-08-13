@@ -432,10 +432,16 @@ fn build_route(settings: &GeneratorSettings) -> Value {
         rules.push(json!({
             "process_name": vpn_filtered,
             "action": "route",
-            // `auto` is the urltest wrapper that picks the fastest
-            // server by latency, so the user doesn't have to pin a
-            // specific tag.
-            "outbound": "auto",
+            // `proxy` (the selector), NOT `auto` (the urltest
+            // wrapper). Pinning to `auto` would mean the user's
+            // server pick is silently ignored — every time urltest
+            // re-evaluated latencies, the picked process could get
+            // routed to a different server than the one the user
+            // chose in the Home tab. The selector's `default` is
+            // already set to the user's pick (or to `auto` when they
+            // chose "Auto" in the picker), so this single rule
+            // honours both modes without a runtime condition.
+            "outbound": "proxy",
         }));
     }
     // 3. User-defined rules.
@@ -897,7 +903,7 @@ mod tests {
             .expect("direct_processes rule present");
         let vpn_rule = rules
             .iter()
-            .find(|r| r.get("outbound") == Some(&json!("auto"))
+            .find(|r| r.get("outbound") == Some(&json!("proxy"))
                 && r.get("process_name").is_some())
             .expect("vpn_processes rule present");
 
@@ -974,7 +980,7 @@ mod tests {
         // VPN rule: only `telegram.exe` survives.
         let vpn_rule = rules
             .iter()
-            .find(|r| r.get("outbound") == Some(&json!("auto"))
+            .find(|r| r.get("outbound") == Some(&json!("proxy"))
                 && r.get("process_name").is_some())
             .expect("vpn_processes rule present after filter");
         let vpn_names: Vec<&str> = vpn_rule["process_name"]
