@@ -87,18 +87,25 @@ percent-encoding = "2"
 url = "2"
 base64 = "0.22"
 
-# Windows registry (used to set/clear the system HTTP/HTTPS proxy
-# when sing-box is running in system_proxy mode so the rest of
-# Windows actually sends traffic through 127.0.0.1:2080).
-[target."cfg(windows)".dependencies]
-winreg = "0.52"
-
 # Process enumeration (used by the routing process-name picker to
 # show currently-running executables the user can match against).
 # Cross-platform — we only need name + pid, not Windows-specific
 # extended process info, so no per-platform features required.
 # `system` feature is required for Process / Pid / System.
+# NB: kept in the platform-agnostic [dependencies] block above so
+# the same dep works on Linux too. (An earlier version of this file
+# had `sysinfo` under [target."cfg(windows)".dependencies] by mistake;
+# that worked on Windows because cfg(windows) accidentally included
+# it, and broke on Linux where the dep was missing entirely.)
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+
+# Windows-only deps. We use #[cfg(windows)] blocks in the code to gate
+# the Windows-specific calls; `winreg` is the registry API for
+# setting the system HTTP/HTTPS proxy when sing-box is running in
+# system_proxy mode. The Linux equivalent (`commands::apply_system_proxy`
+# gated by `#[cfg(target_os = "linux")]`) uses gsettings/nmcli.
+[target."cfg(windows)".dependencies]
+winreg = "0.52"
 
 [dev-dependencies]
 # Used by the Этап 8 dry-run example to fetch a real subscription URL.
