@@ -45,6 +45,9 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
+# `relaunch()` from @tauri-apps/plugin-process. Required so the
+# Tauri updater can re-exec the binary after `downloadAndInstall`.
+tauri-plugin-process = "2"
 # Auto-update for the app shell. Reads the manifest hosted on
 # GitHub Releases (see tauri.conf.json > plugins.updater.endpoints)
 # and applies signed updates. The matching npm package is
