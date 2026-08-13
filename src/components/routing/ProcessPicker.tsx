@@ -30,11 +30,18 @@ interface Props {
   selected: string[];
   /** Called with the next value of the array. */
   onChange: (next: string[]) => void;
+  /**
+   * If true, the picker is fully read-only: the toggle button is
+   * disabled, the search box is disabled, and clicks on process
+   * rows do nothing. Used when routing cannot apply (e.g. the
+   * user is in system-proxy / no-TUN mode).
+   */
+  disabled?: boolean;
 }
 
 const SELECTED_KEY = (n: string) => n.toLowerCase();
 
-export function ProcessPicker({ selected, onChange }: Props) {
+export function ProcessPicker({ selected, onChange, disabled }: Props) {
   const [open, setOpen] = useState(false);
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -95,7 +102,11 @@ export function ProcessPicker({ selected, onChange }: Props) {
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+        disabled={disabled}
+        className={cn(
+          "w-full flex items-center justify-between px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground",
+          disabled && "opacity-50 cursor-not-allowed hover:text-muted-foreground",
+        )}
       >
         <span className="flex items-center gap-1.5">
           <ListChecks size={12} />
@@ -116,7 +127,8 @@ export function ProcessPicker({ selected, onChange }: Props) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search process name…"
-              className="flex-1 rounded-md bg-background border border-input px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              disabled={disabled}
+              className="flex-1 rounded-md bg-background border border-input px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <Button
               variant="ghost"
@@ -172,10 +184,12 @@ export function ProcessPicker({ selected, onChange }: Props) {
                     key={p.pid}
                     type="button"
                     onClick={() => toggle(p.name)}
+                    disabled={disabled}
                     className={cn(
                       "w-full flex items-center justify-between gap-2 px-2 py-1 text-xs text-left transition",
                       "hover:bg-accent",
                       active && "bg-primary/15",
+                      disabled && "opacity-50 cursor-not-allowed hover:bg-transparent",
                     )}
                   >
                     <span className="flex items-center gap-2 min-w-0">

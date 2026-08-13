@@ -24,7 +24,7 @@
 // pick which programs use VPN and which don't, nothing else".
 
 import { useMemo, useState } from "react";
-import { Copy, RotateCcw, Shield, ShieldOff, TriangleAlert, X } from "lucide-react";
+import { Copy, Network, RotateCcw, Shield, ShieldOff, TriangleAlert, X } from "lucide-react";
 import { Button } from "../Button";
 import { RuleList } from "./RuleList";
 import { PresetPicker } from "./PresetPicker";
@@ -44,6 +44,16 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
   const r = settings.routing;
   const updateRouting = (patch: Partial<RoutingOptions>) =>
     onSettingsChange({ ...settings, routing: { ...r, ...patch } });
+
+  // Routing only really works in TUN mode. In `system_proxy` the OS
+  // sends browser traffic through the local proxy, but process-level
+  // matchers (process_name / process_path) never fire because the
+  // proxy doesn't see the originating process. `none` obviously has
+  // no routing at all. So we lock the tab to read-only when the
+  // configured tunnel mode is anything but TUN — and show a banner
+  // pointing the user at the Config tab.
+  const isTunActive =
+    settings.tunnel_mode === "tun" || settings.tunnel_mode === "both";
 
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
@@ -129,12 +139,37 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onResetRouting} title="Reset routing">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onResetRouting}
+            disabled={!isTunActive}
+            title={isTunActive ? "Reset routing" : "Switch to TUN mode to edit"}
+          >
             <RotateCcw size={14} className="mr-1" />
             Reset
           </Button>
         </div>
       </div>
+
+      {/* TUN-required banner. The tab is read-only when the user is
+          on system_proxy / none, because process-level matchers
+          (`process_name` / `process_path`) — the whole point of the
+          simple-UX pickers — never fire without a TUN interface. */}
+      {!isTunActive && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-700 dark:text-amber-300 flex items-start gap-2">
+          <Network size={14} className="mt-0.5 flex-shrink-0" />
+          <div className="min-w-0">
+            <strong>Routing requires TUN mode.</strong> Process-based
+            rules (the pickers below) only work when sing-box is
+            capturing traffic at the OS level. Switch to{" "}
+            <code className="font-mono bg-amber-500/20 rounded px-1">TUN</code>{" "}
+            or <code className="font-mono bg-amber-500/20 rounded px-1">TUN + system proxy</code>{" "}
+            in the <strong>Config</strong> tab to enable routing.
+            Current mode: <code className="font-mono bg-amber-500/20 rounded px-1">{settings.tunnel_mode}</code>.
+          </div>
+        </div>
+      )}
 
       {/* Simple UX: two process-picker cards. */}
       <ProcessPickerCard
@@ -144,6 +179,7 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
         accent="vpn"
         selected={r.vpn_processes}
         onChange={(next) => updateRouting({ vpn_processes: next })}
+        disabled={!isTunActive}
       />
       <ProcessPickerCard
         icon={<ShieldOff size={16} className="text-muted-foreground" />}
@@ -152,6 +188,7 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
         accent="direct"
         selected={r.direct_processes}
         onChange={(next) => updateRouting({ direct_processes: next })}
+        disabled={!isTunActive}
       />
 
       {/* Overlap warning — same process in BOTH lists. */}
@@ -189,11 +226,25 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
               — {r.rules.length} rule{r.rules.length === 1 ? "" : "s"}, {r.rule_sets.length} rule-set{r.rule_sets.length === 1 ? "" : "s"}
             </span>
           )}
+          {!isTunActive && (
+            <span className="ml-auto text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-300 font-medium">
+              read-only
+            </span>
+          )}
         </summary>
 
         <div className="px-3 pb-3 pt-1 space-y-4 border-t border-border">
-          {/* General settings — sniff, final, auto_detect_interface */}
-          <div className="rounded-md border border-border bg-background/30 p-4">
+          {/* General settings — sniff, final, auto_detect_interface.
+              pointer-events-none + opacity-60 is the cheapest way
+              to lock down a whole panel without touching the
+              individual controls (checkbox, select) inside. */}
+          <div
+            className={cn(
+              "rounded-md border border-border bg-background/30 p-4",
+              !isTunActive && "pointer-events-none opacity-60",
+            )}
+            aria-disabled={!isTunActive}
+          >
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <label className="flex items-center gap-2 text-sm text-foreground">
                 <input
@@ -249,8 +300,11 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
             </div>
           )}
 
-          {/* Main: rule list */}
-          <div>
+          {/* Main: rule list — locked when not in TUN */}
+          <div
+            className={cn(!isTunActive && "pointer-events-none opacity-60")}
+            aria-disabled={!isTunActive}
+          >
             <h3 className="text-sm font-medium text-foreground mb-2">Custom rules ({r.rules.length})</h3>
             <RuleList
               rules={r.rules}
@@ -263,16 +317,28 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
             />
           </div>
 
-          {/* Rule-sets */}
-          <RuleSetsPanel
-            ruleSets={r.rule_sets}
-            onChange={(rule_sets) => updateRouting({ rule_sets })}
-          />
+          {/* Rule-sets — locked when not in TUN */}
+          <div
+            className={cn(!isTunActive && "pointer-events-none opacity-60")}
+            aria-disabled={!isTunActive}
+          >
+            <RuleSetsPanel
+              ruleSets={r.rule_sets}
+              onChange={(rule_sets) => updateRouting({ rule_sets })}
+            />
+          </div>
 
-          {/* Preset library */}
-          <PresetPicker onAddRule={onAddRule} onAddRuleSet={onAddRuleSet} />
+          {/* Preset library — locked when not in TUN */}
+          <div
+            className={cn(!isTunActive && "pointer-events-none opacity-60")}
+            aria-disabled={!isTunActive}
+          >
+            <PresetPicker onAddRule={onAddRule} onAddRuleSet={onAddRuleSet} />
+          </div>
 
-          {/* JSON preview (toggled by its own button) */}
+          {/* JSON preview stays interactive (just viewing) — useful
+              for the user to see what their existing config looks
+              like while they decide whether to switch to TUN. */}
           <div className="flex items-center justify-end">
             <Button variant="ghost" size="sm" onClick={() => setJsonOpen(!jsonOpen)}>
               {jsonOpen ? "Hide JSON" : "Show JSON"}
@@ -313,6 +379,7 @@ function ProcessPickerCard({
   accent,
   selected,
   onChange,
+  disabled,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -320,9 +387,16 @@ function ProcessPickerCard({
   accent: "vpn" | "direct";
   selected: string[];
   onChange: (next: string[]) => void;
+  disabled?: boolean;
 }) {
   return (
-    <section className="rounded-md border border-border bg-card/30 p-4 space-y-3">
+    <section
+      className={cn(
+        "rounded-md border border-border bg-card/30 p-4 space-y-3",
+        disabled && "opacity-70",
+      )}
+      aria-disabled={disabled}
+    >
       <div className="flex items-start gap-2.5">
         <div className="mt-0.5">{icon}</div>
         <div className="min-w-0">
@@ -344,15 +418,20 @@ function ProcessPickerCard({
             <button
               key={name}
               type="button"
-              onClick={() => onChange(selected.filter((n) => n !== name))}
+              onClick={() => {
+                if (disabled) return;
+                onChange(selected.filter((n) => n !== name));
+              }}
+              disabled={disabled}
               className={cn(
                 "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-xs transition",
                 "hover:opacity-80",
                 accent === "vpn"
                   ? "border-primary/40 bg-primary/10 text-primary"
                   : "border-muted-foreground/40 bg-muted text-foreground",
+                disabled && "cursor-not-allowed hover:opacity-100",
               )}
-              title={`Remove ${name}`}
+              title={disabled ? "Switch to TUN mode to edit" : `Remove ${name}`}
               aria-label={`Remove ${name} from ${accent === "vpn" ? "Apps via VPN" : "Apps direct"}`}
             >
               <span className="font-mono">{name}</span>
@@ -365,7 +444,7 @@ function ProcessPickerCard({
       {/* The reusable ProcessPicker. The button "Pick from running…"
           stays inside it; the chip area above is the user's quick
           way to see and remove selections. */}
-      <ProcessPicker selected={selected} onChange={onChange} />
+      <ProcessPicker selected={selected} onChange={onChange} disabled={disabled} />
     </section>
   );
 }
