@@ -115,3 +115,16 @@
     );
   }
 }
+
+/* The Advanced section in the Routing tab uses an uncontrolled
+ * <details> with a CSS-driven arrow. React state isn't needed —
+ * the browser already tracks the open state, and forcing a controlled
+ * <details> introduces a re-render race where the browser toggle can
+ * be overwritten by React's reconciliation. The arrow swaps to ▾
+ * when the parent <details> is open, and back to ▸ when closed. */
+details > summary .advanced-arrow::before {
+  content: "▸";
+}
+details[open] > summary .advanced-arrow::before {
+  content: "▾";
+}

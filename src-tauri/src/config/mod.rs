@@ -402,16 +402,35 @@ fn build_route(settings: &GeneratorSettings) -> Value {
     // `vpn_processes` second. Each list is emitted as a single rule
     // with the `process_name` matcher; sing-box matches the first
     // one and the loop ends.
-    if !r.direct_processes.is_empty() {
+    //
+    // We filter out empty / whitespace-only entries: sing-box
+    // would happily emit them but they'd match nothing useful and
+    // (depending on the version) some builds warn or refuse to
+    // start with an empty string in `process_name[]`. The UI never
+    // produces empties (ProcessPicker only adds real .exe names),
+    // but a hand-edited localStorage might.
+    let direct_filtered: Vec<String> = r
+        .direct_processes
+        .iter()
+        .filter(|n| !n.trim().is_empty())
+        .cloned()
+        .collect();
+    let vpn_filtered: Vec<String> = r
+        .vpn_processes
+        .iter()
+        .filter(|n| !n.trim().is_empty())
+        .cloned()
+        .collect();
+    if !direct_filtered.is_empty() {
         rules.push(json!({
-            "process_name": r.direct_processes,
+            "process_name": direct_filtered,
             "action": "route",
             "outbound": "direct",
         }));
     }
-    if !r.vpn_processes.is_empty() {
+    if !vpn_filtered.is_empty() {
         rules.push(json!({
-            "process_name": r.vpn_processes,
+            "process_name": vpn_filtered,
             "action": "route",
             // `auto` is the urltest wrapper that picks the fastest
             // server by latency, so the user doesn't have to pin a
@@ -920,6 +939,48 @@ mod tests {
             !rules.iter().any(|r| r.get("process_name").is_some()),
             "default RoutingOptions must not synthesise a process_name rule"
         );
+    }
+
+    #[test]
+    fn process_picker_filters_empty_and_whitespace_names() {
+        // Defensive: hand-edited / corrupted localStorage could put
+        // empty strings or whitespace into the arrays. sing-box would
+        // either warn or refuse to start; the generator must drop
+        // them so the produced config is always clean.
+        let mut s = GeneratorSettings::default();
+        s.routing.vpn_processes = vec![
+            "".to_string(),
+            "   ".to_string(),
+            "telegram.exe".to_string(),
+        ];
+        s.routing.direct_processes = vec![
+            "bank.exe".to_string(),
+            "\t\n".to_string(),
+        ];
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+
+        // Direct rule: only `bank.exe` survives the filter.
+        let direct_rule = rules
+            .iter()
+            .find(|r| r.get("outbound") == Some(&json!("direct"))
+                && r.get("process_name").is_some())
+            .expect("direct_processes rule present after filter");
+        let direct_names: Vec<&str> = direct_rule["process_name"]
+            .as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(direct_names, vec!["bank.exe"]);
+
+        // VPN rule: only `telegram.exe` survives.
+        let vpn_rule = rules
+            .iter()
+            .find(|r| r.get("outbound") == Some(&json!("auto"))
+                && r.get("process_name").is_some())
+            .expect("vpn_processes rule present after filter");
+        let vpn_names: Vec<&str> = vpn_rule["process_name"]
+            .as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(vpn_names, vec!["telegram.exe"]);
     }
 
     #[test]

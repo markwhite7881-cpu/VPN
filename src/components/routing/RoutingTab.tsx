@@ -24,7 +24,7 @@
 // pick which programs use VPN and which don't, nothing else".
 
 import { useMemo, useState } from "react";
-import { Copy, RotateCcw, Shield, ShieldOff, X } from "lucide-react";
+import { Copy, RotateCcw, Shield, ShieldOff, TriangleAlert, X } from "lucide-react";
 import { Button } from "../Button";
 import { RuleList } from "./RuleList";
 import { PresetPicker } from "./PresetPicker";
@@ -47,7 +47,6 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
 
   const [jsonOpen, setJsonOpen] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   // Build a sing-box-style JSON view of the routing config.
   // This is purely informational — the *real* generation is in Rust.
@@ -99,6 +98,26 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
     return Array.from(used).filter((t) => !have.has(t));
   }, [r.rules, r.rule_sets]);
 
+  // Same process name in BOTH "Apps via VPN" and "Apps direct".
+  // sing-box will route it direct (direct_processes rule comes first
+  // in the generated `route.rules`), so the "VPN" entry is silently
+  // overridden. Warn the user so the misconfiguration doesn't bite
+  // them later.
+  const overlapProcessNames = useMemo(() => {
+    const v = new Set(r.vpn_processes.map((n) => n.toLowerCase()));
+    const d = new Set(r.direct_processes.map((n) => n.toLowerCase()));
+    const out: string[] = [];
+    for (const n of v) {
+      if (d.has(n)) {
+        // Display the original case from the VPN list (whichever
+        // order the user added them).
+        const display = r.vpn_processes.find((x) => x.toLowerCase() === n) ?? n;
+        out.push(display);
+      }
+    }
+    return out;
+  }, [r.vpn_processes, r.direct_processes]);
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -135,17 +154,37 @@ export function RoutingTab({ profiles, settings, onSettingsChange }: Props) {
         onChange={(next) => updateRouting({ direct_processes: next })}
       />
 
+      {/* Overlap warning — same process in BOTH lists. */}
+      {overlapProcessNames.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300 flex items-start gap-2">
+          <TriangleAlert size={14} className="mt-0.5 flex-shrink-0" />
+          <div>
+            <strong>Same program in both lists:</strong>{" "}
+            {overlapProcessNames.map((n, i) => (
+              <span key={n}>
+                <code className="font-mono mx-0.5 bg-amber-500/20 rounded px-1">{n}</code>
+                {i < overlapProcessNames.length - 1 ? ", " : ""}
+              </span>
+            ))}
+            . It will go <em>direct</em> (the direct list wins). Remove it from one of the lists if you meant otherwise.
+          </div>
+        </div>
+      )}
+
       {/* Advanced — collapsed by default. Houses the full rule editor
-          and JSON preview. Non-tech-savvy users never see this. */}
-      <details
-        className="rounded-md border border-border bg-card/30 open:bg-card/40 transition"
-        open={advancedOpen}
-        onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
-      >
+          and JSON preview. Non-tech-savvy users never see this.
+          Note: this <details> is uncontrolled (no `open` prop, no
+          React state) — the browser manages the open/close state
+          directly, and the arrow indicator uses a CSS pseudo-class
+          (`details[open] > summary .advanced-arrow`). Controlled
+          <details> in React has a race where the browser's toggle
+          can be overwritten by React's reconciliation before
+          onToggle fires. */}
+      <details className="rounded-md border border-border bg-card/30 open:bg-card/40 transition">
         <summary className="cursor-pointer select-none px-3 py-2 text-sm font-medium text-foreground hover:text-primary flex items-center gap-2 list-none [&::-webkit-details-marker]:hidden">
-          <span className="text-xs text-muted-foreground">{advancedOpen ? "▾" : "▸"}</span>
+          <span className="advanced-arrow text-xs text-muted-foreground" />
           Advanced
-          {r.rules.length > 0 && (
+          {(r.rules.length > 0 || r.rule_sets.length > 0) && (
             <span className="text-[10px] text-muted-foreground font-normal">
               — {r.rules.length} rule{r.rules.length === 1 ? "" : "s"}, {r.rule_sets.length} rule-set{r.rule_sets.length === 1 ? "" : "s"}
             </span>
@@ -314,6 +353,7 @@ function ProcessPickerCard({
                   : "border-muted-foreground/40 bg-muted text-foreground",
               )}
               title={`Remove ${name}`}
+              aria-label={`Remove ${name} from ${accent === "vpn" ? "Apps via VPN" : "Apps direct"}`}
             >
               <span className="font-mono">{name}</span>
               <X size={11} className="opacity-70" />
