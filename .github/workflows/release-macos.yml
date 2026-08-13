@@ -3,14 +3,18 @@ name: release-macos
 # Build unsigned .app + .dmg for macOS on every push to the
 # linux/macos-build branch, plus on tag pushes (so we can also
 # cut a release from a tag). Build for both Apple Silicon
-# (aarch64-apple-darwin) and Intel (x86_64-apple-darwin), and
-# also a universal binary via `lipo` so one .dmg works on any
-# Mac.
+# (aarch64-apple-darwin) and Intel (x86_64-apple-darwin) in
+# parallel — the user picks the right .dmg for their Mac.
+#
+# We tried `universal-apple-darwin` first (one .dmg for both
+# arches via lipo), but `dtolnay/rust-toolchain@stable` doesn't
+# accept the virtual target triple, and Tauri 2's "universal"
+# target still needs both arch toolchains anyway. Two .dmgs is
+# the cleanest path until/unless we add code-signing.
 #
 # Outputs (uploaded as workflow artifacts):
 #   - Cloakwire_<ver>_aarch64.dmg
 #   - Cloakwire_<ver>_x64.dmg
-#   - Cloakwire_<ver>_universal.dmg
 #
 # Not signed / not notarized. Users have to "Open Anyway" once
 # from System Settings → Privacy & Security. Add signing later
@@ -44,10 +48,6 @@ jobs:
             rust_target: x86_64-apple-darwin
             triple: x86_64-apple-darwin
             arch_label: x64
-          - target: universal-apple-darwin
-            rust_target: universal-apple-darwin
-            triple: universal
-            arch_label: universal
 
     steps:
       - name: Checkout
@@ -87,10 +87,9 @@ jobs:
         run: npm ci
 
       - name: Build Tauri bundle
-        # `--target universal-apple-darwin` builds a single binary
-        # that runs on both arm64 and x86_64 Macs. Tauri 2 handles
-        # the rest of the bundling (.app + .dmg) when we pass
-        # `--bundles app,dmg`.
+        # --bundles app,dmg produces both the .app (drag-to-Applications)
+        # and the .dmg (mount + drag). Tauri 2 picks the right
+        # sing-box sidecar from binaries/ based on the --target triple.
         run: |
           npm run tauri:build -- --target ${{ matrix.target }} --bundles app,dmg
         env:
@@ -99,12 +98,9 @@ jobs:
       - name: Rename DMG
         id: rename
         run: |
-          # Tauri emits the DMG with the version number embedded
-          # (e.g. `Cloakwire_1.0.3_aarch64.dmg` for arm64, but
-          # `Cloakwire_1.0.3_universal.dmg` for universal). Strip
-          # the arch suffix when there's only one variant, keep
-          # it when we built two specific arches, so a downstream
-          # script can guess which .dmg to upload.
+          # Tauri 2 emits the .dmg at
+          # src-tauri/target/<target>/release/bundle/dmg/Cloakwire_<ver>_<arch>.dmg.
+          # We just rename it to a stable name for the artifact.
           set -e
           src_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
           if [ ! -d "$src_dir" ]; then
