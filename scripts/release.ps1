@@ -3,16 +3,20 @@
 # What this does:
 #   1. `npm run tauri build` — produces MSI + NSIS in
 #      src-tauri\target\release\bundle\
-#   2. `npx tauri signer sign` — signs each installer with the
-#      project's private key (src-tauri\.tauri-updater.key, NEVER
-#      commit this) and emits `.sig` sidecar files.
+#   2. `src-tauri\crates\tauri-signer\target\release\tauri-signer.exe`
+#      — signs each installer with the project's private key
+#      (src-tauri\.tauri-updater.key, NEVER commit this) and emits
+#      `.sig` sidecar files. We use our own signer because
+#      `npx tauri signer sign` hangs on Windows after
+#      "Signing without password." (TTY-detection bug in
+#      tauri-cli 2.x).
 #   3. Produces `latest.json` — the manifest the running app
 #      fetches from GitHub Releases to know there's a new version.
 #   4. Prints the `gh release create` command you'll need to
 #      upload the artifacts + latest.json to GitHub.
 #
 # Usage (PowerShell):
-#   .\scripts\release.ps1 -Version 1.0.0
+#   .\scripts\release.ps1 -Version 1.0.1
 #
 # The script does NOT push to GitHub — it stops just short of
 # that so you can review the manifest, then asks you to confirm.
@@ -28,6 +32,13 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BundleRoot = Join-Path $ProjectRoot "src-tauri\target\release\bundle"
 $KeyPath = Join-Path $ProjectRoot "src-tauri\.tauri-updater.key"
 $LatestPath = Join-Path $ProjectRoot "latest.json"
+$SignerExe = Join-Path $ProjectRoot "src-tauri\crates\tauri-signer\target\release\tauri-signer.exe"
+
+if (-not (Test-Path $SignerExe)) {
+    Write-Host "ERROR: tauri-signer.exe not found at $SignerExe" -ForegroundColor Red
+    Write-Host "Build it with: cd src-tauri/crates/tauri-signer && cargo build --release"
+    exit 1
+}
 
 if (-not (Test-Path $KeyPath)) {
     Write-Host "ERROR: signing key not found at $KeyPath" -ForegroundColor Red
@@ -74,21 +85,21 @@ if (Test-Path $nsisDir) { $items += Get-ChildItem $nsisDir -Filter "*.exe" }
 foreach ($item in $items) {
     $filePath = $item.FullName
     Write-Host "    signing $filePath..." -ForegroundColor DarkCyan
-    # `tauri signer sign` writes `<file>.sig` next to the file.
-    # `-f` is private-key path; on CI you'd use TAURI_SIGNING_PRIVATE_KEY env.
-    & npx tauri signer sign -f $KeyPath $filePath 2>&1 | Select-Object -Last 3
+    # Our local tauri-signer writes `<file>.sig` next to the file
+    # in the standard minisign format (no password prompt — the
+    # tauri-generated key file uses KDF with empty passphrase, and
+    # the tauri-signer binary passes `Some("")` accordingly).
+    & $SignerExe -k $KeyPath $filePath 2>&1 | Select-Object -Last 3
     $sigPath = "$filePath.sig"
     if (-not (Test-Path $sigPath)) {
         Write-Host "ERROR: signature file not produced for $filePath" -ForegroundColor Red
         exit 1
     }
-    $sig = (Get-Content $sigPath -Raw -Encoding UTF8).Trim()
-    # `tauri signer sign` emits "untrusted comment: ..." lines then
-    # `signature:<base64>`. The Rust verifier only needs the base64
-    # Ed25519 signature.
-    $sigB64 = ($sig -split "`n" |
-        Where-Object { $_.StartsWith("signature:") } |
-        Select-Object -First 1) -replace '^signature:\s*', ''
+    # Standard minisign signature file: 2 "untrusted comment" lines
+    # framing 2 base64 lines. The Rust verifier wants only the second
+    # base64 line (the Ed25519 signature).
+    $sigLines = (Get-Content $sigPath -Encoding UTF8)
+    $sigB64 = ($sigLines | Select-Object -Skip 2 -First 1).Trim()
     $fileName = [System.IO.Path]::GetFileName($filePath)
     $url = "https://github.com/markwhite7881-cpu/VPN/releases/download/v$Version/$fileName"
     $signatures["windows-x86_64"] = @{ url = $url; signature = $sigB64 }
