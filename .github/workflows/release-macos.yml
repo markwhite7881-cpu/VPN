@@ -1,0 +1,152 @@
+name: release-macos
+
+# Build unsigned .app + .dmg for macOS on every push to the
+# linux/macos-build branch, plus on tag pushes (so we can also
+# cut a release from a tag). Build for both Apple Silicon
+# (aarch64-apple-darwin) and Intel (x86_64-apple-darwin), and
+# also a universal binary via `lipo` so one .dmg works on any
+# Mac.
+#
+# Outputs (uploaded as workflow artifacts):
+#   - Cloakwire_<ver>_aarch64.dmg
+#   - Cloakwire_<ver>_x64.dmg
+#   - Cloakwire_<ver>_universal.dmg
+#
+# Not signed / not notarized. Users have to "Open Anyway" once
+# from System Settings → Privacy & Security. Add signing later
+# by adding APPLE_CERT_P12_BASE64 + APPLE_CERT_PASSWORD secrets
+# and a notarytool step.
+
+on:
+  push:
+    branches:
+      - linux/macos-build
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: build (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+            triple: aarch64-apple-darwin
+            arch_label: aarch64
+          - target: x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+            triple: x86_64-apple-darwin
+            arch_label: x64
+          - target: universal-apple-darwin
+            rust_target: universal-apple-darwin
+            triple: universal
+            arch_label: universal
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+          restore-keys: |
+            cargo-${{ matrix.target }}-
+
+      - name: Install build dependencies
+        # create-dmg is what Tauri 2 uses under the hood to produce
+        # the .dmg from the .app bundle. It's not preinstalled on
+        # the runner image (was preinstalled on older versions but
+        # Apple Silicon runners dropped it).
+        run: |
+          brew install create-dmg
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build Tauri bundle
+        # `--target universal-apple-darwin` builds a single binary
+        # that runs on both arm64 and x86_64 Macs. Tauri 2 handles
+        # the rest of the bundling (.app + .dmg) when we pass
+        # `--bundles app,dmg`.
+        run: |
+          npm run tauri:build -- --target ${{ matrix.target }} --bundles app,dmg
+        env:
+          NO_STRIP: "true"
+
+      - name: Rename DMG
+        id: rename
+        run: |
+          # Tauri emits the DMG with the version number embedded
+          # (e.g. `Cloakwire_1.0.3_aarch64.dmg` for arm64, but
+          # `Cloakwire_1.0.3_universal.dmg` for universal). Strip
+          # the arch suffix when there's only one variant, keep
+          # it when we built two specific arches, so a downstream
+          # script can guess which .dmg to upload.
+          set -e
+          src_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          if [ ! -d "$src_dir" ]; then
+            src_dir="src-tauri/target/release/bundle/dmg"
+          fi
+          src=$(ls -1 "$src_dir"/*.dmg | head -1)
+          ver=$(echo "$src" | sed -nE 's/.*_([0-9]+\.[0-9]+\.[0-9]+).*\.dmg/\1/p')
+          if [ -z "$ver" ]; then
+            ver="0.0.0"
+          fi
+          dst="dist/Cloakwire_${ver}_${{ matrix.arch_label }}.dmg"
+          mkdir -p dist
+          mv "$src" "$dst"
+          echo "dst=$dst" >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloakwire-macos-${{ matrix.arch_label }}
+          path: ${{ steps.rename.outputs.dst }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # Combine the per-arch .dmgs into a "ready to upload" bundle
+  # that downstream `gh release upload` can download in one shot.
+  publish-ready:
+    name: collect artifacts
+    needs: build-macos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: List
+        run: ls -la dist/cloakwire-macos-*/
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloakwire-macos-all
+          path: dist/cloakwire-macos-*/
+          retention-days: 14

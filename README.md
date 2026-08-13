@@ -61,6 +61,46 @@ Cloakwire создаёт защищённый маршрут именно так
 
 > 💡 **Совет:** Windows SmartScreen может предупредить о неподписанном издателе. Нажмите "Подробнее" → "Выполнить в любом случае" — это нормально для open source без code-signing сертификата.
 
+### Linux — `.deb` для Ubuntu / Debian
+
+> ⚠️ **Linux-порт в бете** — собирается, запускается, TUN-режим работает, но без тщательного тестирования на разных DE. Жду багрепорты.
+
+Скачайте **`Cloakwire_1.0.x_amd64.deb`** (21 MB) из Releases и поставьте:
+
+```bash
+sudo apt install ./Cloakwire_1.0.x_amd64.deb
+cloakwire
+```
+
+Зависимости (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) уже есть на любом Ubuntu 22.04+ / Debian 12+ desktop. Postinst автоматически делает `setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box` — нужно для TUN-режима.
+
+Если TUN-режим всё равно не работает (например, после `apt upgrade` потерялись capabilities):
+
+```bash
+sudo setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box
+```
+
+Cloakwire сама покажет понятную ошибку с этой командой, если caps пропадут.
+
+**System Proxy** на Linux работает через `gsettings` (GNOME / MATE / Cinnamon / XFCE / Budgie / Pantheon) или `kwriteconfig5` (KDE). TUN-режим рекомендуется — он перехватывает трафик на сетевом уровне и не зависит от поддержки proxy в приложениях.
+
+Универсальная альтернатива — **`Cloakwire_1.0.x_amd64.AppImage`** (96 MB) одним файлом для Arch / Fedora / openSUSE / любой DE. TUN требует ручной setcap (см. выше) — извлеките AppImage (`--appimage-extract`) и примените caps к `squashfs-root/usr/bin/sing-box`.
+
+### macOS — `.dmg` для Apple Silicon и Intel
+
+> ⚠️ **macOS-порт в бете** — собирается, запускается, TUN работает (через системный `utun`). Без подписи / нотаризации — потребуется «Open Anyway» при первом запуске.
+
+Скачайте **`Cloakwire_1.0.x_universal.dmg`** (~120 MB, universal — Apple Silicon + Intel) из Releases, откройте и перетащите Cloakwire в Applications.
+
+При первом запуске macOS заблокирует приложение (нет подписи):
+```bash
+xattr -d com.apple.quarantine /Applications/Cloakwire.app
+open /Applications/Cloakwire.app
+```
+Или через UI: правый клик на Cloakwire.app → Open → Open → Open Anyway.
+
+TUN-режим на macOS использует встроенный `utun` (не `/dev/net/tun` как на Linux). Приложение само запросит разрешение на добавление VPN-конфигурации через System Settings → VPN. Дополнительных capabilities / setcap не нужно.
+
 ### Собрать из исходников
 
 ```powershell

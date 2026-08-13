@@ -53,6 +53,48 @@ Head to **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/r
 
 > 💡 **Note:** Windows SmartScreen may warn about an unknown publisher. Click "More info" → "Run anyway" — this is normal for unsigned open-source apps.
 
+### Linux — `.deb` for Ubuntu / Debian
+
+> ⚠️ **Linux port is in beta** — it builds, runs, and TUN mode works, but it hasn't been exhaustively tested across desktop environments. Bug reports welcome.
+
+Grab **`Cloakwire_1.0.x_amd64.deb`** (21 MB) from Releases and install it:
+
+```bash
+sudo apt install ./Cloakwire_1.0.x_amd64.deb
+cloakwire
+```
+
+Dependencies (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) are preinstalled on any Ubuntu 22.04+ / Debian 12+ desktop. The postinst automatically runs `setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box` — required for TUN mode.
+
+If TUN mode still fails (e.g. capabilities were stripped during an `apt upgrade`):
+
+```bash
+sudo setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box
+```
+
+Cloakwire itself surfaces a clear error with this exact command when caps are missing.
+
+**System Proxy** on Linux goes through `gsettings` (GNOME / MATE / Cinnamon / XFCE / Budgie / Pantheon) or `kwriteconfig5` (KDE). TUN mode is recommended — it captures traffic at the network layer and doesn't depend on per-app proxy support.
+
+For Arch / Fedora / openSUSE / any other distro there's the universal **`Cloakwire_1.0.x_amd64.AppImage`** (96 MB, single file). TUN needs a manual setcap (same as above) — extract the AppImage (`--appimage-extract`) and apply caps to `squashfs-root/usr/bin/sing-box`.
+
+### macOS — `.dmg` for Apple Silicon and Intel
+
+> ⚠️ **macOS port is in beta** — it builds, runs, and TUN works (via the system `utun`). Unsigned / un-notarized build, so first launch needs "Open Anyway".
+
+Grab **`Cloakwire_1.0.x_universal.dmg`** (~120 MB, universal — Apple Silicon + Intel) from Releases, open it and drag Cloakwire into Applications.
+
+On first launch macOS will block the app (no signing):
+
+```bash
+xattr -d com.apple.quarantine /Applications/Cloakwire.app
+open /Applications/Cloakwire.app
+```
+
+Or via UI: right-click Cloakwire.app → Open → Open → Open Anyway.
+
+TUN mode on macOS uses the system `utun` (not `/dev/net/tun` like Linux). The app will request VPN configuration permission via System Settings → VPN. No extra capabilities / setcap required.
+
 ### Build from source
 
 ```powershell
