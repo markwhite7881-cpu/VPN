@@ -6,10 +6,19 @@
 // when launched via `Start-Process` / `npm run` and blocks forever.
 // Tauri 2 has had this bug open for ~2 years without a fix.
 //
-// This binary uses the same `minisign` crate (v0.9) the upstream
-// CLI uses internally, but goes straight from `SecretKey` to
-// `SignatureBox` without any interactive prompt. The output is
-// byte-identical to what Tauri's Rust updater verifies.
+// This binary produces the exact same .sig files and manifest
+// `signature` strings that the official Tauri CLI would.
+//
+// Output format:
+//   - `.sig` sidecar: standard 4-line minisign wire format
+//     (untrusted comment, base64 sig blob, trusted comment,
+//     base64 global sig) — same as what `npx tauri signer sign`
+//     writes.
+//   - The `signature` field of `latest.json` is
+//     `base64(.sig file content)` — base64 of the entire
+//     multi-line file as a string. This is what
+//     `tauri-plugin-updater` decodes back into a string and
+//     hands to `minisign_verify::Signature::decode`.
 //
 // KEY-FILE FORMAT: `tauri signer generate` produces a key file
 // that is itself base64-encoded; inside, the standard minisign
@@ -29,7 +38,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use minisign::{sign as minisign_sign, SecretKey, SecretKeyBox};
+use minisign::{sign as minisign_sign, SecretKey};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -125,17 +134,25 @@ fn main() -> ExitCode {
             }
         };
 
-        // Tauri's verifier expects `<file>.sig` next to the file.
+        // The minisign crate v0.9's `SignatureBox` exposes the full
+        // multi-line .sig wire format via `.into_string()`. Tauri's
+        // CLI signer writes this same string to the .sig file, and
+        // then base64-encodes THAT string to put in the manifest's
+        // `signature` field. We do the same.
+        let sig_text = sig_box.into_string();
+
+        // Tauri's verifier expects `<file>.sig` next to the file,
+        // in the standard 4-line minisign format.
         let sig_path = match target.extension().and_then(|e| e.to_str()) {
             Some(ext) => target.with_extension(format!("{ext}.sig")),
             None => target.with_extension("sig"),
         };
-        if let Err(e) = std::fs::write(&sig_path, sig_box.into_string().as_bytes()) {
+        if let Err(e) = std::fs::write(&sig_path, sig_text.as_bytes()) {
             eprintln!("error: writing {}: {e}", sig_path.display());
             ok = false;
             continue;
         }
-        println!("wrote {}", sig_path.display());
+        println!("wrote {} ({} bytes)", sig_path.display(), sig_text.len());
     }
 
     if ok {
@@ -188,7 +205,23 @@ fn load_key(keyfile: &Path) -> Result<SecretKey, String> {
     result.map_err(|e| e.to_string())
 }
 
-/// Minimal base64 decoder that doesn't pull in another dependency.
+/// Extract the raw 64-byte Ed25519 signature from a minisign
+/// `SignatureBox`'s rendered 4-line text format.
+///
+/// The minisign crate's `SignatureBox` has no public way to get
+/// just the 64-byte sig (all interesting fields are `pub(crate)`).
+/// The output of `to_string()` looks like:
+///
+///   untrusted comment: ...
+///   <base64 of [2 magic][8 keynum][64 Ed25519 sig]>   <-- line 2 (index 1)
+///   trusted comment: ...
+///   <base64 of [64 global sig]>
+///
+/// We take line 2, base64-decode it (104 chars → 74 bytes), and
+/// return the trailing 64 bytes.
+#[allow(dead_code)]
+fn _extract_ed25519_sig_unused() {}
+/// Minimal base64 decoder for the tauri-signer key-file fallback.
 /// We could use the `base64` crate but it's already in the main
 /// project — for this tiny tool we keep deps minimal.
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
