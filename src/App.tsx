@@ -960,7 +960,7 @@ export default function App() {
                 Cloakwire
               </h1>
               <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                v1.0.1
+                v1.0.2
               </Badge>
             </div>
             <p className="text-[11px] text-muted-foreground">
