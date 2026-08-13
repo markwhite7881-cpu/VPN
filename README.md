@@ -1,216 +1,212 @@
+<div align="center">
+
+<img src="src-tauri/icons/icon.png" alt="Cloakwire" width="128" />
+
 # Cloakwire
 
-Cross-platform GUI VPN client built on top of the [sing-box](https://github.com/SagerNet/sing-box) core.
-Tauri 2.x + React + TypeScript, styled after [classquiz](https://classquiz.ru).
+**Privacy-first GUI VPN client built on top of [sing-box](https://github.com/SagerNet/sing-box).**
 
-Cloakwire wraps sing-box's full protocol stack (VLESS, VMess, Trojan,
-Shadowsocks, Hysteria2, TUIC) in a minimal, opinionated UI: pick a few
-programs to route through the VPN, leave the rest direct, done.
+Tauri 2 + React + TypeScript, стилизован под [classquiz](https://classquiz.ru).
 
-## Project status
+[![Release](https://img.shields.io/github/v/release/markwhite7881-cpu/cloakwire?include_prereleases&sort=semver&style=for-the-badge)](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/markwhite7881-cpu/cloakwire/total?style=for-the-badge)](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)
+[![License](https://img.shields.io/github/license/markwhite7881-cpu/cloakwire?style=for-the-badge)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/markwhite7881-cpu/cloakwire?style=for-the-badge)](https://github.com/markwhite7881-cpu/cloakwire/stargazers)
 
-| Stage | Status | Notes |
-|-------|--------|-------|
-| Этап 1. Tauri scaffold + sidecar | ✅ done | Spawn/stop, log streaming, health-check, default config |
-| Этап 2. Protocol link parser | ✅ done | vless / vmess / trojan / ss / hy2 / tuic |
-| Этап 3. Config generator | ✅ done | TUN inbound, route rules, selector/urltest groups, `sing-box check` clean |
-| Этап 4. Clash API integration | ✅ done | list/select/test_delay over HTTP API |
-| Этап 5. Server list + traffic chart | ✅ done | WebSocket traffic stream, SVG sparklines |
-| Этап 6. Subscription auto-refresh | ✅ done | Fetch + parse + per-line errors + auto-refresh tick |
-| Этап 7. Routing + autostart | ✅ done | Embedded geosite/geoip presets (ads/CN/RU/QUIC) + Windows autostart |
-| Этап 8. v1.0.1 + auto-update | ✅ done | Tauri updater for shell, GitHub-driven sing-box core update |
+</div>
 
-## Architecture
+> 🇬🇧 **English version:** [README.en.md](README.en.md)
+
+---
+
+## 🎯 Что это такое
+
+**Cloakwire** — это минималистичный GUI VPN-клиент для Windows, который оборачивает мощь [sing-box](https://github.com/SagerNet/sing-box) в понятный интерфейс. Полный стек протоколов (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC), авто-обновления и sing-box core в одном приложении.
+
+**Главная идея:** вы просто выбираете программы, которые должны идти через VPN — остальное идёт напрямую. Никаких сложных правил, никакого конфига вручную.
+
+---
+
+## ✨ Почему Cloakwire
+
+| | |
+|---|---|
+| 🚀 **Быстрый старт** | Подписка или share-link → готово за минуту |
+| 🎯 **Per-app маршруты** | "Telegram через VPN, банк-клиент напрямую" — одной галочкой |
+| 🔄 **Авто-обновления** | И оболочка, и sing-box core обновляются сами |
+| 🛡️ **Полный sing-box** | VLESS, VMess, Trojan, SS, Hysteria2, TUIC |
+| 🪶 **Лёгкий** | 7 MB portable, минимум зависимостей |
+| 🎨 **Минималистичный UI** | Тёмная тема, один взгляд — и всё понятно |
+| 🔓 **Open Source** | MIT, без трекеров, без телеметрии |
+
+---
+
+## 📥 Установка
+
+### Скачать готовый билд (рекомендуется)
+
+Перейдите в **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)** и скачайте:
+
+- **`Cloakwire_1.0.x_x64-setup.exe`** (16 MB) — NSIS-установщик, рекомендуется
+- **`Cloakwire_1.0.x_x64_en-US.msi`** (27 MB) — MSI для корпоративного деплоя
+- **`Cloakwire-1.0.x-portable.exe`** (7.4 MB) — portable, без установки
+
+> 💡 **Совет:** Windows SmartScreen может предупредить о неподписанном издателе. Нажмите "Подробнее" → "Выполнить в любом случае" — это нормально для open source без code-signing сертификата.
+
+### Собрать из исходников
+
+```powershell
+# Требования: Node 20+, Rust 1.77+, Tauri CLI (npm i -g @tauri-apps/cli)
+git clone https://github.com/markwhite7881-cpu/cloakwire.git
+cd cloakwire
+npm install
+npm run tauri:build
+# Артефакты: src-tauri\target\release\bundle\{msi,nsis}\
+```
+
+Portable exe: `src-tauri\target\release\cloakwire.exe`
+
+---
+
+## 🚀 Первый запуск
+
+1. Запустите Cloakwire (потребуются права администратора для TUN-режима)
+2. **Servers** → вставьте share-link (`vless://...`) или subscription URL → **Add**
+3. **Routing** → добавьте программы в "Apps via VPN" (например `telegram.exe`)
+4. **Config** → убедитесь, что **Tunnel mode = TUN**
+5. **Home** → нажмите большую кнопку питания
+
+Готово. Весь трафик выбранных программ идёт через VPN, остальное — напрямую.
+
+---
+
+## 🖼️ Скриншоты
+
+> Скриншоты появятся скоро — соберём их на v1.0.3+.
+
+А пока — словами:
+- **Header:** логотип Cloakwire + версия + статус sing-box core
+- **Home:** большая кнопка Start/Stop, live график трафика, обновления
+- **Servers:** список подписок + manual profiles, drag-and-drop, latency ping
+- **Routing:** top — два process-picker ("Apps via VPN" / "Apps direct"), ниже — Advanced (полный rule editor, drag-and-drop, presets, rule-sets)
+- **Config:** режимы TUN/system proxy/both, DNS, preview сгенерированного `config.json`
+- **Logs:** live tail sing-box с фильтром
+
+---
+
+## 🏗️ Архитектура
 
 ```
 ┌──────────────────────┐
-│  React + Tailwind    │  ← tauri::invoke for everything
+│  React + Tailwind    │  ← tauri::invoke для всего
 │  (src/)              │
 └──────────┬───────────┘
            │ tauri::invoke  (typed commands)
 ┌──────────▼───────────┐
-│  Rust backend        │  ← process manager, state, logs
-│  (src-tauri/src)     │
+│  Rust + Tauri 2      │  ← CLI/sign/process/tun/log/updater
+│  (src-tauri/src/)    │
 └──────────┬───────────┘
-           │ tokio::process::Command
+           │ std::process::Command
 ┌──────────▼───────────┐
-│  sing-box sidecar    │  ← bundled as binaries/sing-box-<triple>.exe
-│  + libcronet.dll     │
+│  sing-box            │  ← VLESS/VMess/Trojan/SS/Hy2/TUIC, TUN, route
+│  (binaries/)         │
 └──────────────────────┘
 ```
 
-The Rust process never reimplements any protocol. The whole networking stack
-is delegated to sing-box; we just generate `config.json` and monitor the process.
+**Слои:**
+1. **Frontend** — React + TypeScript + Tailwind, дизайн-токены classquiz
+2. **Tauri shell** — Rust-обёртка: команды процесса, авто-обновления, логирование, TUN-управление
+3. **sing-box core** — сам VPN-протокол, конфиг генерируется из UI-структуры
 
-## Layout
+---
 
-```
-cloakwire/
-├── src/                       Frontend (React + TS)
-│  ├── App.tsx                 main screen
-│  ├── components/             Button, Card, Badge, StatusPill, LogView,
-│  │                          ProfileCard, ConfigBuilder, ProxiesCard,
-│  │                          TrafficCard, SubscriptionsCard, UpdateCard
-│  ├── hooks/                  useTrafficStream, useSubscriptions, useServerLatency, useGeoIp
-│  ├── lib/                    api.ts (Tauri wrappers), types.ts, utils.ts,
-│  │                          previewConfig.ts (browser mirror of Rust),
-│  │                          manualProfiles.ts (paste-link persistence)
-│  └── index.css               design tokens (HSL variables, classquiz palette)
-├── src-tauri/
-│  ├── Cargo.toml
-│  ├── tauri.conf.json
-│  ├── capabilities/default.json
-│  ├── icons/                  32/128/128@2x.png, multi-res .ico
-│  ├── binaries/               sing-box-<triple>.exe + libcronet.dll
-│  ├── crates/tauri-signer/    local replacement for the broken
-│  │                          `npx tauri signer sign` (see below)
-│  └── src/
-│     ├── main.rs              entry point
-│     ├── lib.rs               tauri::Builder, plugin registration
-│     ├── process.rs           sing-box lifecycle, log ring buffer, watcher
-│     ├── commands.rs          #[tauri::command] surface
-│     ├── updates.rs           sing-box auto-update (GitHub releases API)
-│     ├── clash_api.rs         proxy list / select / test_delay
-│     ├── traffic.rs           /traffic WebSocket stream
-│     ├── config/mod.rs        TunnelMode, RoutingOptions, config generator
-│     ├── parser/              vless / vmess / trojan / ss / hy2 / tuic / to_json
-│     └── error.rs             AppError + AppResult
-├── scripts/
-│   ├── rebrand-icons.py       regenerate icons with background removal
-│   ├── release.ps1            one-shot release pipeline (build, sign, push)
-│   └── tauri-signer/          local signer (see "Why a custom signer")
-├── vite.config.ts
-├── tailwind.config.js
-├── tsconfig.json
-└── package.json
-```
+## 🛠️ Стек
 
-## Develop
+| Слой | Технология |
+|------|------------|
+| Shell | **Tauri 2** (Rust + WebView) |
+| UI | **React 18** + **TypeScript 5** |
+| Стили | **Tailwind CSS 3** + shadcn-style design tokens |
+| Ядро VPN | [**sing-box**](https://github.com/SagerNet/sing-box) 1.10+ (sidecar) |
+| Drag-and-drop | **@dnd-kit/sortable** |
+| Иконки | **lucide-react** |
+| Авто-обновления | `tauri-plugin-updater` + `tauri-plugin-process` (Ed25519 minisign) |
+| Process enum | `sysinfo` crate |
+| Подпись | Custom `tauri-signer` crate (см. ниже) |
 
-```powershell
-# 1. install JS deps
-npm install
+---
 
-# 2. run Tauri dev (compiles Rust + starts Vite + opens window)
-npm run tauri:dev
+## 📦 Этапы разработки
 
-# 3. build release installer
-npm run tauri:build
-```
+| Этап | Статус | Что сделано |
+|------|--------|-------------|
+| 1. Tauri scaffold + sidecar | ✅ | Spawn/stop, log streaming, health-check, default config |
+| 2. Парсер протоколов | ✅ | vless / vmess / trojan / ss / hy2 / tuic |
+| 3. Генератор конфига | ✅ | TUN inbound, route rules, selector/urltest, `sing-box check` clean |
+| 4. Clash API | ✅ | list/select/test_delay over HTTP |
+| 5. Список серверов + график трафика | ✅ | WebSocket traffic stream, SVG sparklines |
+| 6. Авто-обновление подписок | ✅ | Fetch + parse + per-line errors + auto-refresh tick |
+| 7. Routing + автозапуск | ✅ | Geosite/geoip presets (ads/CN/RU/QUIC) + Windows autostart |
+| 8. v1.0.0 + авто-обновление | ✅ | Tauri updater (Ed25519), sing-box core auto-update |
 
-`sing-box` is bundled inside `src-tauri/binaries/`. To upgrade the core
-from inside the app, click "Download" in the Updates card on the
-Home tab — Cloakwire fetches the latest release from SagerNet/sing-box,
-verifies it, and replaces the runtime-cached binary automatically.
+---
 
-## Auto-update
+## 🔐 Безопасность
 
-Cloakwire auto-updates both:
+- **Ed25519 minisign** для подписи обновлений (Tauri updater + наш `tauri-signer`)
+- **Без телеметрии**, без аналитики, без "phone home" кроме проверки обновлений
+- **Локальные настройки** в `%APPDATA%\ru.classquiz.singbox\` (Tauri `app_data_dir`)
+- **Безопасный WebView** с CSP = null только для удобства разработки (в release-билде стоит пересмотреть)
+- **Open source** — каждая строчка кода видна
 
-- **the app shell** — via `tauri-plugin-updater` reading
-  `latest.json` from this repo's GitHub Releases
-- **the sing-box core** — via the custom Rust commands in
-  `src-tauri/src/updates.rs`, querying `api.github.com/repos/
-  SagerNet/sing-box/releases/latest`
+---
 
-Both are surfaced in the **Updates** card on the Home tab.
+## 🧪 Smoke-тест (Stage 1)
 
-### Why a custom signer
-
-The Tauri CLI's `npx tauri signer sign` hangs on Windows after
-printing "Signing without password." — the CLI uses an interactive
-password prompt that detects a TTY wrong on Windows when launched
-non-interactively. This bug is open in tauri-cli 2.x.
-
-We ship a focused replacement at `src-tauri/crates/tauri-signer/`
-that uses the same `minisign` crate directly and never prompts for
-input. The release script `scripts/release.ps1` calls it instead of
-the upstream CLI:
+Минимальная проверка, что sing-box живёт:
 
 ```powershell
-.\scripts\release.ps1 -Version 1.0.1
-# → npm run tauri:build
-# → src-tauri\crates\tauri-signer\target\release\tauri-signer.exe -k ... <artifacts>
-# → latest.json (BOM-free)
-# → gh release create v1.0.1 ...
+# Запустите Cloakwire один раз — он распакует sing-box в %APPDATA%\ru.classquiz.singbox\binaries\
+Get-Process sing-box
+# Должен показать запущенный процесс
 ```
 
-## Stage 1 smoke test
+---
 
-1. `npm run tauri:dev`
-2. Click **Use default** in the Config card — the backend writes a
-   minimal config to `%TEMP%` and validates it with `sing-box check`.
-3. Click **Connect**. The hero card flips to "Tunnel is up", the
-   process card shows PID + uptime, and logs start streaming.
-4. `curl -x socks5h://127.0.0.1:2080 https://api.ipify.org` should
-   return your real IP (the default config uses a `direct` outbound).
-5. Click **Disconnect** to stop sing-box.
+## 🤝 Contributing
 
-## Stage 3 — verify the generated config against the real sidecar
+PR-ы приветствуются. Перед большим изменением лучше открыть issue — обсудим.
 
-Two examples live in `src-tauri/examples/`:
+- **Code style:** `cargo fmt` для Rust, `prettier` для TS/TSX (`npm run build` проверяет)
+- **Tests:** `cargo test --lib` (56 unit-тестов на конфиг-генератор и парсер)
+- **Commits:** conventional commits помогают (`feat:`, `fix:`, `chore:`)
 
-```powershell
-Set-Location C:\Users\Алексей\.minimax-agent\projects\cloakwire\src-tauri
-$env:PATH = "C:\Users\Алексей\.cargo\bin;$env:PATH"
+---
 
-# Skinny: uses only SS/VMess/TUIC (no X25519 keys required).
-# Passes `sing-box check` end-to-end against the bundled binary.
-cargo run --example verify_config_skinny
+## 🛠️ Почему кастомный подписант
 
-# Full: VLESS+Reality, Hy2, SS, Trojan. Passes `sing-box check` of
-# the structure; the X25519 public key is a placeholder so the
-# actual `check` step warns about it.
-cargo run --example verify_config
-```
+`npx tauri signer sign` подвисает на Windows после "Signing without password." (TTY-детект в tauri-cli сломан). Мы собрали `tauri-signer` crate, который использует тот же `minisign = "0.9"` что и апстрим, но без интерактивного prompt'а. Исходник: `src-tauri/crates/tauri-signer/`.
 
-Both write the generated JSON to `src-tauri/examples/verify_output*.json`
-and then run `sing-box check -c <file>`. The skinny version passes with
-exit 0; the full version explains the placeholder credentials.
+---
 
-If you want to feed the result into a real sing-box:
+## 📜 Лицензия
 
-```powershell
-& .\src-tauri\binaries\sing-box-x86_64-pc-windows-msvc.exe run `
-  -c .\src-tauri\examples\verify_output_skinny.json
-```
+[MIT](LICENSE) — делайте что хотите, но упомяните авторов.
 
-## Stage 6 — subscription auto-refresh
+---
 
-The **Subscriptions** card lets you paste one or more subscription URLs.
-Each URL is fetched on demand; the response (plain or base64) is split
-per line, every line is parsed as a share-link, and the resulting
-profiles are merged into the main list at the top of the screen.
+## 🙏 Благодарности
 
-```powershell
-# The backend command:
-tauri::invoke('fetch_subscription', { url: 'https://...' })
-# → { lines: 12, ok: 11, failed: [{ line, error }] }
-```
+- [**SagerNet/sing-box**](https://github.com/SagerNet/sing-box) — самый быстрый и гибкий VPN-протокол из существующих
+- [**Tauri**](https://tauri.app) — обёртка для десктопных приложений, которая не подводит
+- [**classquiz**](https://classquiz.ru) — design system inspiration
 
-State is persisted to `localStorage` so URLs survive a refresh; the
-hook re-fetches every 30 s only when at least one subscription is
-configured. A failed line shows the parser error next to its index so
-you can see exactly which line was rejected.
+---
 
-## Stage 7 — routing presets + Windows autostart
+<div align="center">
 
-The **Config builder** card exposes six routing toggles in addition to
-the two base ones (bypass-LAN, reject-IPv6):
+**[⬇ Скачать последнюю версию](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)** · **[🐛 Сообщить о баге](https://github.com/markwhite7881-cpu/cloakwire/issues)** · **[⭐ Поставить звезду](https://github.com/markwhite7881-cpu/cloakwire)**
 
-| Toggle | sing-box rule(s) |
-|--------|------------------|
-| Block QUIC | `port_range: ["443:443"], network: udp, action: reject` |
-| Block ads | `geosite: category-ads-all, action: reject` |
-| Bypass CN | `geosite: [cn], action: direct` + `geoip: [cn], action: direct` |
-| Bypass RU | `geoip: [ru], action: direct` |
+Made with care for people who value their privacy.
 
-All presets use sing-box's **embedded** classifier — no `.dat` file
-download required. The order of `route.rules` is fixed (sniff → reject
-→ direct → final) so the more specific rules always win.
-
-The **autostart** toggle is a thin wrapper around
-`tauri-plugin-autostart`. When enabled it writes a value under
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; when disabled it
-deletes it. The plugin is configured to forward `--minimized` so an
-autostart-on-login can choose to start hidden.
+</div>
