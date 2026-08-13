@@ -90,7 +90,11 @@ Cloakwire сама покажет понятную ошибку с этой ко
 
 > ⚠️ **macOS-порт в бете** — собирается, запускается, TUN работает (через системный `utun`). Без подписи / нотаризации — потребуется «Open Anyway» при первом запуске.
 
-Скачайте **`Cloakwire_1.0.x_universal.dmg`** (~120 MB, universal — Apple Silicon + Intel) из Releases, откройте и перетащите Cloakwire в Applications.
+Скачайте .dmg под свой Mac из Releases:
+- **`Cloakwire_1.0.x_aarch64.dmg`** (~22 MB) — Apple Silicon (M1 / M2 / M3 / M4)
+- **`Cloakwire_1.0.x_x64.dmg`** (~24 MB) — Intel
+
+Откройте .dmg и перетащите Cloakwire в Applications.
 
 При первом запуске macOS заблокирует приложение (нет подписи):
 ```bash

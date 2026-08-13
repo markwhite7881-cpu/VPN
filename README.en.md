@@ -82,7 +82,11 @@ For Arch / Fedora / openSUSE / any other distro there's the universal **`Cloakwi
 
 > ⚠️ **macOS port is in beta** — it builds, runs, and TUN works (via the system `utun`). Unsigned / un-notarized build, so first launch needs "Open Anyway".
 
-Grab **`Cloakwire_1.0.x_universal.dmg`** (~120 MB, universal — Apple Silicon + Intel) from Releases, open it and drag Cloakwire into Applications.
+Grab the .dmg for your Mac from Releases:
+- **`Cloakwire_1.0.x_aarch64.dmg`** (~22 MB) — Apple Silicon (M1 / M2 / M3 / M4)
+- **`Cloakwire_1.0.x_x64.dmg`** (~24 MB) — Intel
+
+Open the .dmg and drag Cloakwire into Applications.
 
 On first launch macOS will block the app (no signing):
 
