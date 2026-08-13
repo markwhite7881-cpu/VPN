@@ -33,7 +33,6 @@ export interface ConfigTabProps {
   onResetSettings: () => void;
   onPickConfig: () => void;
   onUseDefault: () => void;
-  onStart: (configPath: string) => void;
   onConfigPath: (path: string | null) => void;
 }
 
@@ -48,7 +47,6 @@ export function ConfigTab({
   onResetSettings,
   onPickConfig,
   onUseDefault,
-  onStart,
   onConfigPath,
 }: ConfigTabProps) {
   return (
@@ -103,7 +101,6 @@ export function ConfigTab({
         settings={settings}
         onSettingsChange={onSettingsChange}
         onResetSettings={onResetSettings}
-        onStart={onStart}
         onConfigPath={onConfigPath}
       />
 

@@ -19,6 +19,7 @@ import { LogsTab } from "@/components/LogsTab";
 import { ConfigTab } from "@/components/ConfigTab";
 import { RoutingTab } from "@/components/routing/RoutingTab";
 import { TauriCommandError, api } from "@/lib/api";
+import { DEFAULT_SETTINGS } from "@/lib/defaults";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useGeoIp } from "@/hooks/useGeoIp";
 import { isSupported } from "@/lib/outbound";
@@ -62,38 +63,8 @@ function readStoredTab(): TabId {
 const SETTINGS_KEY = "singbox-client.settings.v2";
 const SETTINGS_KEY_V1 = "singbox-client.settings.v1";
 
-/** Default settings — kept in sync with the Rust side defaults. */
-const DEFAULT_SETTINGS: GeneratorSettings = {
-  tunnel_mode: "system_proxy",
-  routing: {
-    rules: [],
-    rule_sets: [],
-    sniff: true,
-    final_outbound: "proxy",
-    auto_detect_interface: true,
-    default_domain_resolver: "local",
-  },
-  clash_api: {
-    external_controller: "127.0.0.1:9090",
-    default_controller: "proxy",
-    secret: null,
-  },
-  tun_interface_name: null,
-  mixed_port: 2080,
-  // Cloudflare 1.1.1.1 — globally reachable. Aliyun 223.5.5.5 only
-  // works from China and times out elsewhere, which breaks the
-  // rule-set fetcher (and the whole internet) when used from
-  // outside China.
-  local_dns: "77.88.8.8",
-  // IP-form DoH endpoint. `dns.google` (hostname) needs DNS to
-  // resolve, which is circular and breaks if the local resolver
-  // can't reach it. Using the IP removes the resolution step.
-  remote_dns: "https://8.8.8.8/dns-query",
-  // null → `auto` urltest picks the fastest server.
-  // Set to a server tag the moment the user clicks a card in
-  // the picker, so the regenerated config boots pinned to it.
-  default_outbound: null,
-};
+// DEFAULT_SETTINGS is imported from @/lib/defaults — single source
+// of truth shared with the Config tab's preview pane.
 
 function freshId(prefix: string) {
   return prefix + "-" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36);
@@ -864,10 +835,6 @@ export default function App() {
             onResetSettings={() => setSettings(DEFAULT_SETTINGS)}
             onPickConfig={onPickConfig}
             onUseDefault={onUseDefault}
-            onStart={(p) => {
-              setConfigPath(p);
-              void onStart();
-            }}
             onConfigPath={(p) => {
               if (p) setConfigPath(p);
             }}

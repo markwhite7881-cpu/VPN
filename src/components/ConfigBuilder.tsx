@@ -1,15 +1,17 @@
-﻿import { useEffect, useState, type HTMLAttributes } from "react";
+﻿import { useEffect, useState } from "react";
 import {
   Check,
   Copy,
   FileCog,
   Loader2,
-  Play,
   Power,
   RotateCcw,
   Save,
   Settings2,
 } from "lucide-react";
+// `Play` removed in v0.3.1 — the Start button in this tab was
+// confusing (cached config, separate path from the real Connect in
+// App.tsx). Use the Home tab's Connect instead.
 import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "@/lib/api";
 import { Button } from "./Button";
@@ -23,42 +25,16 @@ import {
 } from "./Card";
 import { cn } from "@/lib/utils";
 import { previewToSingboxJson } from "./previewConfig";
+import { DEFAULT_SETTINGS } from "@/lib/defaults";
 import type { GeneratorSettings, Outbound, TunnelMode } from "@/lib/types";
 
 const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-const DEFAULT_SETTINGS: GeneratorSettings = {
-  tunnel_mode: "system_proxy",
-  routing: {
-    rules: [],
-    rule_sets: [],
-    sniff: true,
-    final_outbound: "proxy",
-    auto_detect_interface: true,
-    default_domain_resolver: "local",
-  },
-  clash_api: {
-    external_controller: "127.0.0.1:9090",
-    default_controller: "proxy",
-    secret: null,
-  },
-  tun_interface_name: null,
-  mixed_port: 2080,
-  // Cloudflare 1.1.1.1 — globally reachable. Aliyun 223.5.5.5 only
-  // works from China and times out from most other regions, which
-  // breaks the rule-set fetcher (and the whole internet) when the
-  // local DNS is set to it from outside China.
-  local_dns: "1.1.1.1",
-  // IP-form DoH endpoint. `dns.google` (hostname) needs DNS to
-  // resolve, which is circular and breaks if the local resolver
-  // can't reach it. Using the IP removes the resolution step.
-  remote_dns: "https://8.8.8.8/dns-query",
-  // ConfigBuilder is a stand-alone previewer; the live Connect
-  // button lives in App.tsx, so pinning to a specific server
-  // here isn't very useful — leaving the urltest free to pick.
-  default_outbound: null,
-};
+// DEFAULT_SETTINGS is imported from @/lib/defaults so this preview
+// pane and the live app in App.tsx share the same defaults. v0.3.0
+// had a local copy here that drifted to 1.1.1.1 while App.tsx was
+// 77.88.8.8 — fixed by extracting to a shared module.
 
 const TUNNEL_MODES: { value: TunnelMode; label: string; hint: string }[] = [
   {
@@ -91,7 +67,6 @@ interface Props {
   /** Restore all settings to their defaults (Bypass LAN on, Reject IPv6
    *  on, everything else off, system_proxy, mixed_port 2080, etc.). */
   onResetSettings: () => void;
-  onStart: (configPath: string) => void;
   onConfigPath: (path: string | null) => void;
 }
 
@@ -100,13 +75,11 @@ export function ConfigBuilder({
   settings,
   onSettingsChange,
   onResetSettings,
-  onStart,
   onConfigPath,
 }: Props) {
   const [configText, setConfigText] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -221,37 +194,6 @@ export function ConfigBuilder({
     }
   };
 
-  const onStartClick = async () => {
-    if (!configText) {
-      setError("Generate a config first.");
-      return;
-    }
-    if (profiles.length === 0 && inTauri) {
-      setError("Add at least one profile to start a tunnel.");
-      return;
-    }
-    setStarting(true);
-    setError(null);
-    try {
-      let path: string;
-      if (inTauri) {
-        const value = JSON.parse(configText);
-        path = await api.saveConfigToPath(value, undefined);
-        const controllerUrl = `http://${settings.clash_api.external_controller}`;
-        // Start with the controller URL so the Clash API surface
-        // (        await api.startSingboxWithConfig(path, controllerUrl);
-        onConfigPath(path);
-      } else {
-        path = "(preview)";
-      }
-      onStart(path);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setStarting(false);
-    }
-  };
-
   return (
     <Card>
       <CardHeader>
@@ -328,14 +270,42 @@ export function ConfigBuilder({
             />
           </label>
           <label className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs">
+            <span className="text-muted-foreground">TUN interface</span>
+            <input
+              type="text"
+              placeholder="singbox-tun"
+              className="ml-auto w-44 truncate rounded border border-input bg-background px-2 py-0.5 font-mono text-[11px]"
+              value={settings.tun_interface_name ?? ""}
+              onChange={(e) =>
+                update("tun_interface_name", e.target.value || null)
+              }
+              title="Leave blank for the sing-box default ('singbox-tun' on most platforms)"
+            />
+          </label>
+          <label className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs">
+            <span className="text-muted-foreground">Local DNS</span>
+            <input
+              type="text"
+              placeholder="77.88.8.8"
+              className="ml-auto w-44 truncate rounded border border-input bg-background px-2 py-0.5 font-mono text-[11px]"
+              value={settings.local_dns ?? ""}
+              onChange={(e) =>
+                update("local_dns", e.target.value || null)
+              }
+              title="Plain-UDP DNS server (e.g. 77.88.8.8, 1.1.1.1). Avoid hostnames — they require a working DNS to resolve, which is exactly what this server is supposed to provide."
+            />
+          </label>
+          <label className="flex items-center gap-2 rounded-md border border-border bg-card/30 px-2 py-1.5 text-xs">
             <span className="text-muted-foreground">Remote DNS</span>
             <input
               type="text"
+              placeholder="https://8.8.8.8/dns-query"
               className="ml-auto w-44 truncate rounded border border-input bg-background px-2 py-0.5 font-mono text-[11px]"
               value={settings.remote_dns ?? ""}
               onChange={(e) =>
                 update("remote_dns", e.target.value || null)
               }
+              title="DoH / DoT / DoQ endpoint. Resolved through the proxy. IP form is safer than a hostname."
             />
           </label>
         </div>
@@ -429,19 +399,13 @@ export function ConfigBuilder({
             )}
             Copy
           </Button>
-          <Button
-            size="sm"
-            onClick={onStartClick}
-            disabled={!configText || starting}
-          >
-            {starting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Play className="h-3.5 w-3.5" />
-            )}
-            Start
-          </Button>
         </div>
+
+        <p className="text-[10px] text-muted-foreground">
+          Start the tunnel from the <span className="font-medium">Home</span> tab
+          (Connect button). The Config tab is for editing the
+          generated config and exporting it.
+        </p>
 
         {error && (
           <p className="text-[11px] text-destructive">{error}</p>
