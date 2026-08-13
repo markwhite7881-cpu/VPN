@@ -1,6 +1,6 @@
 @echo off
 REM =============================================================
-REM  Singbox Client — Release runner
+REM  Cloakwire — Release runner
 REM
 REM  Uses the standalone .exe from target\release (no tauri dev,
 REM  no file watcher, no restarts). If the release build is missing
@@ -11,7 +11,7 @@ setlocal
 set "ROOT=%~dp0"
 pushd "%ROOT%"
 
-set "EXE=%ROOT%src-tauri\target\release\singbox-client.exe"
+set "EXE=%ROOT%src-tauri\target\release\cloakwire.exe"
 
 if not exist "%EXE%" (
     echo [run-release] release binary not found, building it now...

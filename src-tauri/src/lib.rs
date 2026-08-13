@@ -1,4 +1,4 @@
-//! Singbox Client library entry point.
+//! Cloakwire library entry point.
 //!
 //! `main.rs` is a thin wrapper that calls `run()` from this crate. The
 //! split makes it possible to add a `cdylib` target later for mobile

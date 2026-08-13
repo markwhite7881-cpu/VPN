@@ -953,10 +953,10 @@ export default function App() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-semibold tracking-tight">
-                Singbox Client
+                Cloakwire
               </h1>
               <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                v0.1
+                v1.0.1
               </Badge>
             </div>
             <p className="text-[11px] text-muted-foreground">

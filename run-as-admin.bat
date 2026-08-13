@@ -1,5 +1,5 @@
 @echo off
-REM Launches the singbox-client in Tauri dev mode with Administrator
+REM Launches Cloakwire in Tauri dev mode with Administrator
 REM privileges (right-click → "Run as administrator").
 REM
 REM Needed for TUN mode — sing-box must install the wintun driver
@@ -15,7 +15,7 @@ REM Resolve to absolute path of the project (works regardless of CWD).
 set "PROJECT_DIR=%~dp0"
 
 echo ===============================================
-echo   Singbox Client - Tauri dev (admin mode)
+echo   Cloakwire - Tauri dev (admin mode)
 echo ===============================================
 echo.
 echo Project: %PROJECT_DIR%

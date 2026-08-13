@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Singbox Client design tokens.
+/* Cloakwire design tokens.
  *
  * Palette mirrors classquiz exactly (shadcn-style HSL variables,
  * black & white). Destructive kept for error states; everything else

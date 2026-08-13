@@ -1,7 +1,11 @@
-# Singbox Client
+# Cloakwire
 
 Cross-platform GUI VPN client built on top of the [sing-box](https://github.com/SagerNet/sing-box) core.
 Tauri 2.x + React + TypeScript, styled after [classquiz](https://classquiz.ru).
+
+Cloakwire wraps sing-box's full protocol stack (VLESS, VMess, Trojan,
+Shadowsocks, Hysteria2, TUIC) in a minimal, opinionated UI: pick a few
+programs to route through the VPN, leave the rest direct, done.
 
 ## Project status
 
@@ -14,25 +18,25 @@ Tauri 2.x + React + TypeScript, styled after [classquiz](https://classquiz.ru).
 | Этап 5. Server list + traffic chart | ✅ done | WebSocket traffic stream, SVG sparklines |
 | Этап 6. Subscription auto-refresh | ✅ done | Fetch + parse + per-line errors + auto-refresh tick |
 | Этап 7. Routing + autostart | ✅ done | Embedded geosite/geoip presets (ads/CN/RU/QUIC) + Windows autostart |
-| Этап 8. Real-server testing | ⏳ next |  |
+| Этап 8. v1.0.1 + auto-update | ✅ done | Tauri updater for shell, GitHub-driven sing-box core update |
 
 ## Architecture
 
 ```
-┌────────────────────┐
-│  React + Tailwind  │  ← tauri::invoke for everything
-│  (src/)            │
-└────────┬───────────┘
-         │ tauri::invoke  (typed commands)
-┌────────▼───────────┐
-│  Rust backend      │  ← process manager, state, logs
-│  (src-tauri/src)   │
-└────────┬───────────┘
-         │ tokio::process::Command
-┌────────▼───────────┐
-│  sing-box sidecar  │  ← bundled as binaries/sing-box-<triple>.exe
-│  + libcronet.dll   │
-└────────────────────┘
+┌──────────────────────┐
+│  React + Tailwind    │  ← tauri::invoke for everything
+│  (src/)              │
+└──────────┬───────────┘
+           │ tauri::invoke  (typed commands)
+┌──────────▼───────────┐
+│  Rust backend        │  ← process manager, state, logs
+│  (src-tauri/src)     │
+└──────────┬───────────┘
+           │ tokio::process::Command
+┌──────────▼───────────┐
+│  sing-box sidecar    │  ← bundled as binaries/sing-box-<triple>.exe
+│  + libcronet.dll     │
+└──────────────────────┘
 ```
 
 The Rust process never reimplements any protocol. The whole networking stack
@@ -41,37 +45,44 @@ is delegated to sing-box; we just generate `config.json` and monitor the process
 ## Layout
 
 ```
-singbox-client/
-├─ src/                       Frontend (React + TS)
-│  ├─ App.tsx                 main screen
-│  ├─ components/             Button, Card, Badge, StatusPill, LogView,
+cloakwire/
+├── src/                       Frontend (React + TS)
+│  ├── App.tsx                 main screen
+│  ├── components/             Button, Card, Badge, StatusPill, LogView,
 │  │                          ProfileCard, ConfigBuilder, ProxiesCard,
-│  │                          TrafficCard, SubscriptionsCard
-│  ├─ hooks/                  useTrafficStream, useSubscriptions
-│  ├─ lib/                    api.ts (Tauri wrappers), types.ts, utils.ts,
-│  │                          previewConfig.ts (browser mirror of Rust)
-│  └─ index.css               design tokens (HSL variables, classquiz palette)
-├─ src-tauri/
-│  ├─ Cargo.toml
-│  ├─ tauri.conf.json
-│  ├─ capabilities/default.json
-│  ├─ icons/                  32/128/128@2x.png, multi-res .ico
-│  ├─ binaries/               sing-box-<triple>.exe + libcronet.dll
-│  └─ src/
-│     ├─ main.rs              entry point
-│     ├─ lib.rs               tauri::Builder, plugin registration
-│     ├─ process.rs           sing-box lifecycle, log ring buffer, watcher
-│     ├─ commands.rs          #[tauri::command] surface
-│     ├─ clash_api.rs         proxy list / select / test_delay
-│     ├─ traffic.rs           /traffic WebSocket stream
-│     ├─ config/mod.rs        TunnelMode, RoutingOptions, config generator
-│     ├─ parser/              vless / vmess / trojan / ss / hy2 / tuic / to_json
-│     └─ error.rs             AppError + AppResult
-├─ scripts/make_icons.py      regenerate icons (run on demand)
-├─ vite.config.ts
-├─ tailwind.config.js
-├─ tsconfig.json
-└─ package.json
+│  │                          TrafficCard, SubscriptionsCard, UpdateCard
+│  ├── hooks/                  useTrafficStream, useSubscriptions, useServerLatency, useGeoIp
+│  ├── lib/                    api.ts (Tauri wrappers), types.ts, utils.ts,
+│  │                          previewConfig.ts (browser mirror of Rust),
+│  │                          manualProfiles.ts (paste-link persistence)
+│  └── index.css               design tokens (HSL variables, classquiz palette)
+├── src-tauri/
+│  ├── Cargo.toml
+│  ├── tauri.conf.json
+│  ├── capabilities/default.json
+│  ├── icons/                  32/128/128@2x.png, multi-res .ico
+│  ├── binaries/               sing-box-<triple>.exe + libcronet.dll
+│  ├── crates/tauri-signer/    local replacement for the broken
+│  │                          `npx tauri signer sign` (see below)
+│  └── src/
+│     ├── main.rs              entry point
+│     ├── lib.rs               tauri::Builder, plugin registration
+│     ├── process.rs           sing-box lifecycle, log ring buffer, watcher
+│     ├── commands.rs          #[tauri::command] surface
+│     ├── updates.rs           sing-box auto-update (GitHub releases API)
+│     ├── clash_api.rs         proxy list / select / test_delay
+│     ├── traffic.rs           /traffic WebSocket stream
+│     ├── config/mod.rs        TunnelMode, RoutingOptions, config generator
+│     ├── parser/              vless / vmess / trojan / ss / hy2 / tuic / to_json
+│     └── error.rs             AppError + AppResult
+├── scripts/
+│   ├── rebrand-icons.py       regenerate icons with background removal
+│   ├── release.ps1            one-shot release pipeline (build, sign, push)
+│   └── tauri-signer/          local signer (see "Why a custom signer")
+├── vite.config.ts
+├── tailwind.config.js
+├── tsconfig.json
+└── package.json
 ```
 
 ## Develop
@@ -87,12 +98,42 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-`sing-box` is bundled inside `src-tauri/binaries/`. To upgrade the core:
+`sing-box` is bundled inside `src-tauri/binaries/`. To upgrade the core
+from inside the app, click "Download" in the Updates card on the
+Home tab — Cloakwire fetches the latest release from SagerNet/sing-box,
+verifies it, and replaces the runtime-cached binary automatically.
 
-1. Download the latest `sing-box-<ver>-windows-amd64.zip` from
-   <https://github.com/SagerNet/sing-box/releases>.
-2. Extract `sing-box.exe` and `libcronet.dll` into `src-tauri/binaries/`.
-3. Rename `sing-box.exe` to `sing-box-x86_64-pc-windows-msvc.exe`.
+## Auto-update
+
+Cloakwire auto-updates both:
+
+- **the app shell** — via `tauri-plugin-updater` reading
+  `latest.json` from this repo's GitHub Releases
+- **the sing-box core** — via the custom Rust commands in
+  `src-tauri/src/updates.rs`, querying `api.github.com/repos/
+  SagerNet/sing-box/releases/latest`
+
+Both are surfaced in the **Updates** card on the Home tab.
+
+### Why a custom signer
+
+The Tauri CLI's `npx tauri signer sign` hangs on Windows after
+printing "Signing without password." — the CLI uses an interactive
+password prompt that detects a TTY wrong on Windows when launched
+non-interactively. This bug is open in tauri-cli 2.x.
+
+We ship a focused replacement at `src-tauri/crates/tauri-signer/`
+that uses the same `minisign` crate directly and never prompts for
+input. The release script `scripts/release.ps1` calls it instead of
+the upstream CLI:
+
+```powershell
+.\scripts\release.ps1 -Version 1.0.1
+# → npm run tauri:build
+# → src-tauri\crates\tauri-signer\target\release\tauri-signer.exe -k ... <artifacts>
+# → latest.json (BOM-free)
+# → gh release create v1.0.1 ...
+```
 
 ## Stage 1 smoke test
 
@@ -110,7 +151,7 @@ npm run tauri:build
 Two examples live in `src-tauri/examples/`:
 
 ```powershell
-Set-Location C:\Users\Алексей\.minimax-agent\projects\singbox-client\src-tauri
+Set-Location C:\Users\Алексей\.minimax-agent\projects\cloakwire\src-tauri
 $env:PATH = "C:\Users\Алексей\.cargo\bin;$env:PATH"
 
 # Skinny: uses only SS/VMess/TUIC (no X25519 keys required).
