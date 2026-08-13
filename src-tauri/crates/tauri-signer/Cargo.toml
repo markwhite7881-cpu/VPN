@@ -1,0 +1,11 @@
+[package]
+name = "tauri-signer"
+version = "0.1.0"
+edition = "2021"
+description = "Local replacement for `npx tauri signer sign`. Lives in a separate crate so the requireAdministrator manifest from the main app doesn't apply to it."
+publish = false
+
+[dependencies]
+# Same crate the upstream tauri-cli uses internally. v0.9 reads
+# the modern "chained" format produced by `tauri signer generate`.
+minisign = "0.9"

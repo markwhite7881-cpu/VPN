@@ -12,6 +12,13 @@ src-tauri/binaries/*.dll
 # be committed — losing it means no future updates can be signed.
 src-tauri/.tauri-updater.key
 
+# Build outputs for the auxiliary tauri-signer crate (a local
+# replacement for the broken tauri-cli signer — see
+# src-tauri/crates/tauri-signer/). The target/ subdir is local
+# build output and shouldn't go in git.
+src-tauri/crates/tauri-signer/target/
+src-tauri/crates/tauri-signer/Cargo.lock
+
 # Runtime cache (wry / webview2 data, written to cwd in dev mode)
 src-tauri/cache.db
 src-tauri/cache.db-shm
