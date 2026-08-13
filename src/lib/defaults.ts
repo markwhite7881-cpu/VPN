@@ -18,8 +18,22 @@ export const DEFAULT_SETTINGS: GeneratorSettings = {
   routing: {
     rules: [],
     rule_sets: [],
+    // "Simple" Routing-tab UX writes here. Empty by default — a
+    // brand-new user opens the Routing tab, sees two pickers, picks
+    // a few .exe names, done. Anything not picked goes direct (the
+    // safe default; matches the questionnaire answer "Всё напрямую
+    // кроме selected").
+    vpn_processes: [],
+    direct_processes: [],
     sniff: true,
-    final_outbound: "proxy",
+    // `direct` (not `proxy`) is the right default for the
+    // "simple" UX: by default, all traffic is direct, and the user
+    // opts IN to VPN by adding apps to "Apps via VPN" above. If the
+    // default were `proxy`, the picker would be a no-op (everything
+    // is already via proxy), and the user's "I picked Telegram" would
+    // mysteriously mean "I picked Telegram and now Chrome is also
+    // going via VPN".
+    final_outbound: "direct",
     auto_detect_interface: true,
     default_domain_resolver: "local",
   },

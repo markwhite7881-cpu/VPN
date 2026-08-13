@@ -192,8 +192,17 @@ function migrateRoutingV1ToV2(v1: RoutingOptionsV1): RoutingOptions {
   return {
     rules,
     rule_sets: ruleSets,
+    // `migrateRoutingV1ToV2` only knows about boolean flags → rule
+    // objects. The new "simple" process-picker arrays are always
+    // empty after a v1 migration; users will populate them on the
+    // Routing tab. `final_outbound` is preserved from v1 so the
+    // migration is behaviour-preserving (existing v0.1.0 users who
+    // had `final_outbound: "proxy"` keep that — the new default of
+    // `direct` only applies to first-time v0.3.1+ installs).
+    vpn_processes: [],
+    direct_processes: [],
     sniff: true,
-    final_outbound: v1.final_outbound || "proxy",
+    final_outbound: v1.final_outbound || "direct",
     auto_detect_interface: true,
     default_domain_resolver: "local",
   };

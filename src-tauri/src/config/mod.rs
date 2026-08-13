@@ -55,6 +55,18 @@ pub struct RoutingOptions {
     /// External rule-sets (Loyalsoldier, meta-rules-dat, custom URL).
     #[serde(default)]
     pub rule_sets: Vec<Value>,
+    /// Process names that should route through the VPN (e.g.
+    /// "telegram.exe", "chrome"). Synthesised as a `process_name`
+    /// rule that matches FIRST in the generated `route.rules`. Empty
+    /// by default. The "simple" Routing tab UX writes here.
+    #[serde(default)]
+    pub vpn_processes: Vec<String>,
+    /// Process names that should bypass the VPN (go direct). Same
+    /// shape as `vpn_processes` but synthesised as a `direct` rule
+    /// that matches FIRST (more specific than the VPN list). Empty
+    /// by default.
+    #[serde(default)]
+    pub direct_processes: Vec<String>,
     /// Push `{ action: "sniff" }` at the top of the rules list.
     /// Mirrors the legacy `inbound.sniff` behaviour, now a route action.
     #[serde(default = "default_true")]
@@ -126,6 +138,11 @@ impl Default for RoutingOptions {
         Self {
             rules: Vec::new(),
             rule_sets: Vec::new(),
+            // The "simple" UX in the Routing tab writes here. Both
+            // empty by default — the user's only action is "open the
+            // tab, pick a few .exe names, done".
+            vpn_processes: Vec::new(),
+            direct_processes: Vec::new(),
             sniff: true,
             final_outbound: "proxy".to_string(),
             auto_detect_interface: true,
@@ -377,7 +394,32 @@ fn build_route(settings: &GeneratorSettings) -> Value {
     if r.sniff {
         rules.push(json!({ "action": "sniff" }));
     }
-    // 2. User-defined rules.
+    // 2. Process-picker rules (the "simple" UX in the Routing tab).
+    //
+    // Order matters: `direct_processes` first so a process that
+    // happens to be in BOTH lists always wins for direct (the more
+    // specific / safer choice — bank apps, payment systems).
+    // `vpn_processes` second. Each list is emitted as a single rule
+    // with the `process_name` matcher; sing-box matches the first
+    // one and the loop ends.
+    if !r.direct_processes.is_empty() {
+        rules.push(json!({
+            "process_name": r.direct_processes,
+            "action": "route",
+            "outbound": "direct",
+        }));
+    }
+    if !r.vpn_processes.is_empty() {
+        rules.push(json!({
+            "process_name": r.vpn_processes,
+            "action": "route",
+            // `auto` is the urltest wrapper that picks the fastest
+            // server by latency, so the user doesn't have to pin a
+            // specific tag.
+            "outbound": "auto",
+        }));
+    }
+    // 3. User-defined rules.
     //
     // The UI ships a friendly typed shape:
     //   { id, label, enabled,
@@ -807,6 +849,77 @@ mod tests {
             .any(|r| r.get("network") == Some(&json!("dns"))));
         // Sniff action (since sniff=true by default)
         assert!(rules.iter().any(|r| r.get("action") == Some(&json!("sniff"))));
+    }
+
+    #[test]
+    fn process_picker_rules_emit_direct_before_vpn() {
+        // The "simple" Routing tab UX writes two arrays:
+        //   `direct_processes` — must NEVER go through the proxy
+        //   `vpn_processes`    — must ALWAYS go through the proxy
+        //
+        // We synthesise them as two `process_name` rules in
+        // `route.rules`, and the order is part of the contract:
+        // `direct_processes` rule comes FIRST, so a process that
+        // happens to be in BOTH lists always wins for direct
+        // (the safer / more specific choice — bank apps, payment
+        // systems, local services). `vpn_processes` comes second.
+        let mut s = GeneratorSettings::default();
+        s.routing.direct_processes = vec!["sberbank.exe".to_string(), "localhost-app".to_string()];
+        s.routing.vpn_processes = vec!["telegram.exe".to_string(), "chrome.exe".to_string()];
+        let cfg = Config::build(&fixture_outbounds(), &s);
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+
+        // Find the two process-picker rules. They live right after
+        // the hard-coded DNS-bypass + sniff rules.
+        let direct_rule = rules
+            .iter()
+            .find(|r| r.get("outbound") == Some(&json!("direct"))
+                && r.get("process_name").is_some())
+            .expect("direct_processes rule present");
+        let vpn_rule = rules
+            .iter()
+            .find(|r| r.get("outbound") == Some(&json!("auto"))
+                && r.get("process_name").is_some())
+            .expect("vpn_processes rule present");
+
+        // 1) The lists are emitted verbatim (no normalisation, no
+        //    de-dup — that's the UI's job).
+        let direct_names: Vec<&str> = direct_rule["process_name"]
+            .as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        let vpn_names: Vec<&str> = vpn_rule["process_name"]
+            .as_array().unwrap()
+            .iter().map(|v| v.as_str().unwrap()).collect();
+        assert_eq!(direct_names, vec!["sberbank.exe", "localhost-app"]);
+        assert_eq!(vpn_names, vec!["telegram.exe", "chrome.exe"]);
+
+        // 2) Order: direct rule precedes the VPN rule in the
+        //    generated `route.rules` list. sing-box processes rules
+        //    in order and stops at the first match, so this is what
+        //    makes "direct wins when both lists have the same name".
+        let direct_idx = rules.iter().position(|r| std::ptr::eq(r, direct_rule)).unwrap();
+        let vpn_idx = rules.iter().position(|r| std::ptr::eq(r, vpn_rule)).unwrap();
+        assert!(
+            direct_idx < vpn_idx,
+            "direct_processes rule must precede vpn_processes rule (got direct at {direct_idx}, vpn at {vpn_idx})"
+        );
+
+        // 3) Actions are emitted in sing-box's native string form.
+        assert_eq!(direct_rule["action"], json!("route"));
+        assert_eq!(vpn_rule["action"], json!("route"));
+    }
+
+    #[test]
+    fn empty_process_picker_lists_emit_no_rules() {
+        // Sanity: with both lists empty (the common case for a
+        // first-time user who hasn't touched the Routing tab), the
+        // generator must NOT emit any spurious `process_name` rule.
+        let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
+        let rules = cfg["route"]["rules"].as_array().unwrap();
+        assert!(
+            !rules.iter().any(|r| r.get("process_name").is_some()),
+            "default RoutingOptions must not synthesise a process_name rule"
+        );
     }
 
     #[test]

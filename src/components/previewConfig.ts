@@ -93,8 +93,27 @@ export function previewToSingboxJson(
   const rules: Record<string, unknown>[] = [];
   const ruleSets: Record<string, unknown>[] = [];
   const r = settings.routing;
+  // Hard-coded DNS-bypass rule (always first, mirrors Rust).
+  rules.push({ network: "dns", action: "direct" });
   if (r.sniff) {
     rules.push({ action: "sniff" });
+  }
+  // Process-picker rules (the "simple" UX). Order matters:
+  // `direct_processes` BEFORE `vpn_processes` so a process in both
+  // always wins for direct.
+  if (r.direct_processes.length > 0) {
+    rules.push({
+      process_name: r.direct_processes,
+      action: "route",
+      outbound: "direct",
+    });
+  }
+  if (r.vpn_processes.length > 0) {
+    rules.push({
+      process_name: r.vpn_processes,
+      action: "route",
+      outbound: "auto",
+    });
   }
   for (const rule of r.rules) {
     if (!rule.enabled) continue;
