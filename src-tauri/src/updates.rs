@@ -112,8 +112,16 @@ pub fn runtime_bin_path(app: &AppHandle) -> AppResult<PathBuf> {
 /// installed by a different user into /Applications on macOS)
 /// would fail with EACCES on `execve` — the cache copy in
 /// `app_data_dir` is owned by the running user and is exec-able.
+///
+/// Also: cleans up any *other* `singbox-runtime-*` subdirs under
+/// `app_data_dir` (i.e. from prior app versions) so the cache
+/// doesn't accumulate stale 80-MB binaries forever. Best-effort
+/// — failures here are logged and ignored, never block startup.
 pub fn populate_cache_from_bundled(app: &AppHandle, bundled: &std::path::Path) -> AppResult<PathBuf> {
     let dest = runtime_bin_path(app)?;
+    let dest_dir = dest
+        .parent()
+        .ok_or_else(|| AppError::Spawn("runtime cache path has no parent".into()))?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -130,6 +138,30 @@ pub fn populate_cache_from_bundled(app: &AppHandle, bundled: &std::path::Path) -
         perms.set_mode(0o755);
         std::fs::set_permissions(&dest, perms)?;
     }
+
+    // Orphan cleanup: anything else under app_data_dir that
+    // looks like an old cache (matches `singbox-runtime-*`)
+    // but isn't the one we just populated.
+    let current_subdir = runtime_subdir();
+    if let Ok(entries) = std::fs::read_dir(dest_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if !name_str.starts_with("singbox-runtime-") {
+                continue;
+            }
+            if name_str == current_subdir {
+                continue;
+            }
+            let p = entry.path();
+            log::info!(
+                "updates: removing orphan cache dir {}",
+                p.display()
+            );
+            let _ = std::fs::remove_dir_all(&p);
+        }
+    }
+
     Ok(dest)
 }
 
