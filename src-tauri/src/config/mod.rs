@@ -298,17 +298,19 @@ impl Config {
         root.insert("inbounds".into(), Value::Array(inbounds));
         root.insert("outbounds".into(), Value::Array(outbounds_arr));
         root.insert("route".into(), route);
-        // Explicit HTTP client for remote rule-set downloads. Using
-        // the implicit default is deprecated in sing-box 1.14 and
-        // will be removed in 1.16. We leave `detour` unset so the
-        // http_client uses the system default route for the underlying
-        // TCP connection — pinning `detour: "direct"` would fail
-        // because the bare `direct` outbound has no server defined
-        // and sing-box rejects it as an "empty" detour.
-        root.insert(
-            "http_clients".into(),
-            json!([{ "tag": "rule-set-fetcher" }]),
-        );
+        // NOTE: do NOT emit a top-level `http_clients` array or
+        // `route.default_http_client` here. Both fields were added in
+        // sing-box 1.14.0-alpha.13 and are unknown to sing-box
+        // 1.13.x (the stable SagerNet release we ship today, v1.13.18);
+        // emitting either of them makes `sing-box run` fail with
+        // `json: unknown field "http_clients"`. With both fields
+        // absent, 1.13.x falls back to its implicit default: remote
+        // rule-sets are fetched via the default outbound (the
+        // `proxy` selector). That's slightly suboptimal (the
+        // download goes through the VPN rather than direct), but
+        // functional, and we'll switch to the explicit
+        // `http_clients` + `default_http_client` form once we
+        // upgrade the bundled sing-box to 1.14+.
         root.insert("experimental".into(), clash_api);
         Value::Object(root)
     }
@@ -491,13 +493,13 @@ fn build_route(settings: &GeneratorSettings) -> Value {
     m.insert("rules".into(), Value::Array(rules));
     if !rule_sets.is_empty() {
         m.insert("rule_set".into(), Value::Array(rule_sets));
-        // Tell route to use the explicit `http_clients` entry for
-        // downloads. Without this sing-box falls back to the
-        // (deprecated) implicit default HTTP client.
-        m.insert(
-            "default_http_client".into(),
-            Value::String("rule-set-fetcher".into()),
-        );
+        // Do NOT emit `default_http_client` here. The field is part
+        // of the sing-box 1.14 schema (added in 1.14.0-alpha.13)
+        // and is unknown to the sing-box 1.13.x stable releases we
+        // currently ship. Remote rule-set downloads fall back to
+        // the implicit default HTTP client, which fetches via the
+        // default outbound (the `proxy` selector). See the
+        // matching comment in `Config::build` for context.
     }
     m.insert("final".into(), Value::String(r.final_outbound.clone()));
     m.insert(
@@ -1521,22 +1523,27 @@ mod tests {
     }
 
     #[test]
-    fn http_clients_always_emitted_for_future_proofing() {
-        // sing-box 1.14 deprecates the implicit default HTTP client
-        // (gone in 1.16). We always emit our own `rule-set-fetcher`
-        // entry so the warning never appears regardless of whether
-        // the user enabled any rule-set toggle.
+    fn http_clients_not_emitted_1_13_compat() {
+        // sing-box 1.14.0-alpha.13 introduced the top-level
+        // `http_clients` array (along with `route.default_http_client`).
+        // The stable SagerNet release we currently ship is 1.13.18,
+        // which treats those fields as `unknown field` and refuses
+        // to start. We rely on the implicit default HTTP client
+        // (rule-set downloads go through the default outbound) and
+        // emit neither field. When we upgrade the bundled sing-box
+        // to 1.14+, flip this test + reintroduce the explicit
+        // `http_clients` + `default_http_client` in `Config::build`.
         let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
-        let clients = cfg["http_clients"].as_array().expect("http_clients array");
-        assert_eq!(clients.len(), 1);
-        assert_eq!(clients[0]["tag"], "rule-set-fetcher");
+        assert!(
+            cfg.get("http_clients").is_none(),
+            "top-level http_clients must not be emitted for sing-box 1.13.x"
+        );
     }
 
     #[test]
-    fn default_http_client_set_when_rulesets_present() {
-        // When ANY rule-set is enabled, route.default_http_client
-        // must point at our fetcher so the deprecated implicit
-        // default isn't used.
+    fn default_http_client_not_emitted_1_13_compat() {
+        // Same compat reason as `http_clients_not_emitted_1_13_compat`:
+        // `route.default_http_client` is a 1.14+ field.
         let s = routing(
             GeneratorSettings::default(),
             RoutingOptions {
@@ -1550,19 +1557,9 @@ mod tests {
             },
         );
         let cfg = Config::build(&fixture_outbounds(), &s);
-        assert_eq!(
-            cfg["route"]["default_http_client"], "rule-set-fetcher"
-        );
-    }
-
-    #[test]
-    fn default_http_client_absent_when_no_rulesets() {
-        // No rule-set toggles on → no `default_http_client` in route
-        // (sing-box would error on an unknown http_client ref).
-        let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
         assert!(
             cfg["route"].get("default_http_client").is_none(),
-            "default_http_client should be absent when no rule-sets"
+            "route.default_http_client must not be emitted for sing-box 1.13.x"
         );
     }
 }
