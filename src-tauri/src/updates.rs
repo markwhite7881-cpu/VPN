@@ -385,13 +385,30 @@ fn extract_singbox_from_zip(zip_path: &std::path::Path, out_dir: &std::path::Pat
         )));
     }
     // After extraction, the binary is at `out_dir/sing-box.exe`
-    // (or `out_dir/sing-box` on Unix).
-    let extracted = out_dir.join(RUNTIME_BIN_NAME);
-    if !extracted.exists() {
-        return Err(AppError::Spawn(format!(
-            "expected {} after extraction, but it's missing",
-            extracted.display()
-        )));
+    // (or `out_dir/sing-box` on Unix). BUT: SagerNet archives
+    // since ~1.12 ship nested in a versioned subdirectory
+    // (e.g. `out_dir/sing-box-1.13.18-darwin-arm64/sing-box`),
+    // not as a flat file. Older releases were flat. So we
+    // check the top level first, then walk one level of
+    // subdirectories for the binary.
+    let name = RUNTIME_BIN_NAME;
+    let direct = out_dir.join(name);
+    if direct.exists() {
+        return Ok(direct);
     }
-    Ok(extracted)
+    if let Ok(entries) = std::fs::read_dir(out_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let candidate = path.join(name);
+                if candidate.exists() {
+                    return Ok(candidate);
+                }
+            }
+        }
+    }
+    Err(AppError::Spawn(format!(
+        "expected {} after extraction (also looked in subdirs), but it's missing",
+        direct.display()
+    )))
 }
