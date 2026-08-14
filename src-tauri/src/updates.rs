@@ -140,6 +140,40 @@ pub fn populate_cache_from_bundled(app: &AppHandle, bundled: &std::path::Path) -
         perms.set_mode(0o755);
         std::fs::set_permissions(&dest, perms)?;
     }
+    // macOS: strip the `com.apple.quarantine` xattr that browsers
+    // (Comet in particular) attach to .dmg downloads. Without this,
+    // `execve` of either the cached or the bundled binary silently
+    // fails with EPERM and the app reports "VPN core not detected".
+    //
+    // We strip BOTH paths:
+    //   * the cached copy is what `locate_binary` returns, so it
+    //     MUST be clean for the next sing-box exec
+    //   * the bundled source is what `sing-box check -c <cfg>` and
+    //     `sing-box version` shell out to during config validation,
+    //     and it must also be exec-able for those to work
+    //
+    // Implementation: shell out to the system `xattr` binary
+    // instead of using a Rust crate. Reasoning:
+    //   * macOS ships `xattr` preinstalled since 10.3 — no dep
+    //   * avoids a target-specific dep that complicates `cargo check`
+    //     on Windows and Linux hosts
+    //   * the call is one-shot at first-launch per app version, so
+    //     the process-spawn cost (~5 ms) is irrelevant
+    //   * xattr's exit-code-on-missing-xattr is well-defined (0 even
+    //     if the attribute was already absent), so we don't have to
+    //     special-case "not found" — we just log a warning if it
+    //     fails for any other reason
+    //
+    // Best-effort: any error here is logged and ignored, never
+    // blocking startup. If the binary is actually quarantined and
+    // we somehow fail to strip, the user will see the real error
+    // when sing-box fails to exec (EACCES / EPERM) and the existing
+    // error message in the UI will guide them.
+    #[cfg(target_os = "macos")]
+    {
+        strip_quarantine_log(&dest, "cache");
+        strip_quarantine_log(bundled, "bundled");
+    }
 
     // Orphan cleanup: anything else under app_data_dir that
     // looks like an old cache (matches `singbox-runtime-*`)
@@ -165,6 +199,68 @@ pub fn populate_cache_from_bundled(app: &AppHandle, bundled: &std::path::Path) -
     }
 
     Ok(dest)
+}
+
+/// Remove `com.apple.quarantine` from a file. Used by
+/// `populate_cache_from_bundled` so a freshly-installed .app
+/// downloaded via browsers that tag their downloads (Comet, older
+/// Safari versions, etc.) can run its bundled sing-box without
+/// requiring the user to run `xattr -dr com.apple.quarantine
+/// /Applications/Cloakwire.app` by hand.
+///
+/// Implementation: spawn `/usr/bin/xattr -d com.apple.quarantine
+/// <path>` (macOS-only, gated by `#[cfg(target_os = "macos")]` on
+/// the caller side). We use `-d` (delete) rather than `-c` (clear
+/// all) so we only touch the one attribute we care about and
+/// don't accidentally drop user-set xattrs.
+///
+/// Behavioural notes:
+///   * `xattr -d` exits 0 if the attribute was present and
+///     successfully removed.
+///   * `xattr -d` exits 0 even if the attribute was NOT set
+///     (with the message "No such xattr: com.apple.quarantine"
+///     on stderr) — so we don't need to special-case "already
+///     clean".
+///   * non-zero exit means the syscall genuinely failed (SIP,
+///     readonly mount, file vanished). We log and continue —
+///     `execve` later will surface the real error and the user
+///     sees the existing "VPN core not detected" message.
+#[cfg(target_os = "macos")]
+fn strip_quarantine_log(path: &std::path::Path, source: &str) {
+    let result = std::process::Command::new("/usr/bin/xattr")
+        .arg("-d")
+        .arg("com.apple.quarantine")
+        .arg(path)
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {
+            log::info!(
+                "updates: stripped quarantine from {source} {}",
+                path.display()
+            );
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            let trimmed = stderr.trim();
+            if trimmed.is_empty() {
+                log::debug!(
+                    "updates: xattr on {source} {} exited {:?} (no stderr)",
+                    path.display(),
+                    out.status.code()
+                );
+            } else {
+                log::debug!(
+                    "updates: xattr on {source} {} exited {:?}: {trimmed}",
+                    path.display(),
+                    out.status.code()
+                );
+            }
+        }
+        Err(e) => log::warn!(
+            "updates: failed to spawn xattr for {source} {}: {e}",
+            path.display()
+        ),
+    }
 }
 
 /// True if a runtime-cached binary exists at the user-writable
