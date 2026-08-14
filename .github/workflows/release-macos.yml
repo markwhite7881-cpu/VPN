@@ -64,24 +64,28 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Build sing-box from SagerNet source with custom tags
-        # The SagerNet release tarballs do NOT include the
-        # `with_xhttp` build tag (we confirmed empirically: 1.14.0-beta.14
-        # rejects `transport: "xhttp"` as `unknown field`). The xhttp
-        # VLESS transport IS in the SagerNet source — it just isn't
-        # included in their official release CI. The Windows sidecar
-        # we currently ship (sing-box version 1.14.0-lx.24) was a
-        # hand-built SagerNet source build with `with_xhttp` and a few
-        # other custom tags, so we mirror that here for macOS.
-        # CGO is enabled (the cronet-go / Apple HTTP engine
-        # imports need it). We rely on the macos-latest runner
-        # having the Mac toolchain; cross-compile from Linux is
-        # not viable here without osxcross.
+      - name: Build sing-box from Leadaxe/sing-box-lx fork with custom tags
+        # SagerNet/sing-box releases do NOT include xhttp transport
+        # code in any v1.13/v1.14 release (verified: 0 files matching
+        # xhttp in option/ for v1.13.0, v1.14.0-beta.{9..14}, etc.).
+        # The Windows sidecar we ship (sing-box 1.14.0-lx.24, the
+        # "-lx" suffix comes from the fork) was built from the
+        # Leadaxe/sing-box-lx fork (https://github.com/Leadaxe/sing-box-lx)
+        # on the `lx` branch, which is a SagerNet fork that adds the
+        # full xhttp VLESS client transport plus AmneziaWG/awg,
+        # openvpn, openconnect, and an `lx` command extension.
+        # We mirror that build for macOS here so the sidecar matches
+        # the Windows one byte-for-tag-for-tag (modulo arch and CGO).
+        # CGO is enabled (cronet-go / Apple HTTP engine imports need
+        # it; we cross-build with CGO=0 to verify the upstream Go
+        # dependency tree, but the final binary uses CGO=1).
+        # Submodules are required (gvisor, sing-tun, wireguard-go).
         run: |
           set -e
-          git clone --depth 1 --branch v1.13.18 https://github.com/SagerNet/sing-box.git /tmp/sing-box-src
+          git clone --depth 1 --branch lx --recurse-submodules --shallow-submodules \
+            https://github.com/Leadaxe/sing-box-lx.git /tmp/sing-box-src
           cd /tmp/sing-box-src
-          BUILD_TAGS="with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound"
+          BUILD_TAGS="with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound with_lx_command"
           CGO_ENABLED=1 go build \
             -tags "$BUILD_TAGS" \
             -trimpath \
@@ -90,6 +94,9 @@ jobs:
             ./cmd/sing-box
           chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}"
           "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" version
+          # smoke-test xhttp — the actual reason we're using this fork
+          printf '%s' '{"log":{"level":"info"},"outbounds":[{"type":"vless","tag":"x","server":"x.com","server_port":443,"uuid":"11111111-2222-3333-4444-555555555555","transport":{"type":"xhttp","path":"/x"}}]}' > /tmp/cfg-xhttp.json
+          "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" check -c /tmp/cfg-xhttp.json
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
