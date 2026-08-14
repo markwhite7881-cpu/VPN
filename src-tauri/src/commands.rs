@@ -80,12 +80,38 @@ pub async fn get_singbox_version(app: AppHandle) -> AppResult<SingboxVersion> {
             revision = rest.trim().to_string();
         }
     }
+    // The Leadaxe sing-box-lx fork intentionally ships the binary
+    // with the `version` field set to the literal string "unknown"
+    // (it doesn't embed a semver at build time — the fork is on a
+    // SagerNet base that hasn't tagged a release in the conventional
+    // sense). The Revision field, however, IS populated with a real
+    // git SHA. Substitute a useful identifier so the UI shows
+    // something actionable instead of "sing-box unknown":
+    //
+    //   * "lx @ b87b4dc"  (typical Leadaxe fork build)
+    //   * "1.14.0-lx.24"  (if upstream ever starts populating
+    //                      `version` again — the lx suffix is a
+    //                      community convention)
+    if version.is_empty() || version == "unknown" {
+        if !revision.is_empty() {
+            version = format!("lx @ {}", short_rev(&revision));
+        } else {
+            version = "lx (no revision)".to_string();
+        }
+    }
     Ok(SingboxVersion {
         version,
         environment: env,
         revision,
         raw: stdout,
     })
+}
+
+/// First 8 chars of a git SHA — matches the short format `git log`
+/// shows. The Leadaxe revision is 40 hex chars; we don't want the
+/// full thing in the UI title.
+fn short_rev(rev: &str) -> &str {
+    if rev.len() >= 8 { &rev[..8] } else { rev }
 }
 
 #[tauri::command]
