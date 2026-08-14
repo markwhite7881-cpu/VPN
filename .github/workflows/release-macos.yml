@@ -43,10 +43,12 @@ jobs:
           - target: aarch64-apple-darwin
             rust_target: aarch64-apple-darwin
             triple: aarch64-apple-darwin
+            goarch: arm64
             arch_label: aarch64
           - target: x86_64-apple-darwin
             rust_target: x86_64-apple-darwin
             triple: x86_64-apple-darwin
+            goarch: amd64
             arch_label: x64
 
     steps:
@@ -86,7 +88,10 @@ jobs:
             https://github.com/Leadaxe/sing-box-lx.git /tmp/sing-box-src
           cd /tmp/sing-box-src
           BUILD_TAGS="with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound with_lx_command"
-          CGO_ENABLED=1 go build \
+          # Explicit GOOS/GOARCH so we cross-build correctly even on
+          # Intel macos-latest runners (which would otherwise produce
+          # x86_64 binaries for the aarch64 job too).
+          CGO_ENABLED=1 GOOS=darwin GOARCH=${{ matrix.goarch }} go build \
             -tags "$BUILD_TAGS" \
             -trimpath \
             -ldflags "-s -w -buildid=" \
@@ -94,6 +99,15 @@ jobs:
             ./cmd/sing-box
           chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}"
           "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" version
+          # Arch sanity check: confirm the binary we just built is
+          # actually the arch we asked for. macos-latest is currently
+          # x86_64 Intel — without explicit GOOS/GOARCH we'd silently
+          # produce the wrong binary for the aarch64 job.
+          file "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" | grep -q "${{ matrix.goarch }}" || {
+            echo "::error::built binary is not ${{ matrix.goarch }} — check GOOS/GOARCH cross-compile"
+            file "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}"
+            exit 1
+          }
           # smoke-test xhttp — the actual reason we're using this fork
           printf '%s' '{"log":{"level":"info"},"outbounds":[{"type":"vless","tag":"x","server":"x.com","server_port":443,"uuid":"11111111-2222-3333-4444-555555555555","transport":{"type":"xhttp","path":"/x"}}]}' > /tmp/cfg-xhttp.json
           "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" check -c /tmp/cfg-xhttp.json
