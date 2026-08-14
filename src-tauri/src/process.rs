@@ -603,12 +603,18 @@ pub fn clear_system_proxy() -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+// `not(any(windows, target_os = "macos"))` — the remaining unix
+// family, i.e. Linux. The previous `#[cfg(not(windows))]` stub
+// overlapped with the macOS implementation and produced duplicate
+// definitions when compiling for Darwin. Narrow the no-op gate to
+// Linux only so the three platforms each have exactly one
+// definition.
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn apply_system_proxy(_host: &str, _port: u16) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub fn clear_system_proxy() -> AppResult<()> {
     Ok(())
 }
