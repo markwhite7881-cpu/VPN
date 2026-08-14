@@ -42,9 +42,17 @@ use crate::process::ProcessManager;
 
 /// Path the runtime-cached sing-box lives at, relative to the
 /// per-platform app data dir (`app.path().app_data_dir()`).
-/// We use a subdirectory so the file is clearly ours and won't
-/// collide with whatever else might end up in `app_data_dir/`.
-const RUNTIME_BIN_SUBDIR: &str = "singbox-runtime";
+///
+/// We embed the app version in the subdir name so that an app
+/// upgrade (which usually ships a newer bundled sing-box) starts
+/// fresh — the old cache is orphaned and harmless, and the new
+/// cache starts empty. Without this, a 1.13.18 cached from a
+/// prior `apply_singbox_update` would keep winning over a
+/// 1.14.x that ships with the new .app, even though the bundled
+/// is the "newer" one the user actually wants.
+fn runtime_subdir() -> String {
+    format!("singbox-runtime-{}", env!("CARGO_PKG_VERSION"))
+}
 #[cfg(windows)]
 const RUNTIME_BIN_NAME: &str = "sing-box.exe";
 #[cfg(not(windows))]
@@ -85,14 +93,44 @@ impl SingboxUpdateInfo {
     }
 }
 
-/// Resolve `<app_data_dir>/singbox-runtime/sing-box.exe`. The
-/// directory may not exist yet; we create it on first write.
+/// Resolve `<app_data_dir>/singbox-runtime-<version>/sing-box.exe`.
+/// The directory may not exist yet; we create it on first write.
 pub fn runtime_bin_path(app: &AppHandle) -> AppResult<PathBuf> {
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|e| AppError::BinaryNotFound(format!("app_data_dir: {e}")))?;
-    Ok(dir.join(RUNTIME_BIN_SUBDIR).join(RUNTIME_BIN_NAME))
+    Ok(dir.join(runtime_subdir()).join(RUNTIME_BIN_NAME))
+}
+
+/// Copy the bundled sing-box into the runtime cache directory and
+/// `chmod +x` it. Called from `process::locate_binary` when the
+/// cache is empty so a fresh install (or an app upgrade that
+/// bumped the cache subdir) gets a user-writable, user-executable
+/// copy of the bundled binary. Without this, a freshly-installed
+/// .app whose bundled sidecar landed with 0644 perms (e.g.
+/// installed by a different user into /Applications on macOS)
+/// would fail with EACCES on `execve` — the cache copy in
+/// `app_data_dir` is owned by the running user and is exec-able.
+pub fn populate_cache_from_bundled(app: &AppHandle, bundled: &std::path::Path) -> AppResult<PathBuf> {
+    let dest = runtime_bin_path(app)?;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    log::info!(
+        "updates: populating cache from bundled {} -> {}",
+        bundled.display(),
+        dest.display()
+    );
+    std::fs::copy(bundled, &dest)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms)?;
+    }
+    Ok(dest)
 }
 
 /// True if a runtime-cached binary exists at the user-writable

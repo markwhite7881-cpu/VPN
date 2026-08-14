@@ -141,11 +141,18 @@ impl ProcessManager {
     ///
     /// Order:
     /// 1. `SINGBOX_BIN` env override (useful for tests / custom builds).
-    /// 2. `<app_data_dir>/singbox-runtime/sing-box.exe` — the
-    ///    user-writable copy placed by the sing-box auto-update
-    ///    (see `updates::apply_singbox_update`). This is what the
-    ///    user gets after they accept an auto-update.
+    /// 2. `<app_data_dir>/singbox-runtime-<appver>/sing-box.exe` —
+    ///    the user-writable copy. Populated from the bundled on
+    ///    first launch (see step 3 fallback), and replaced by
+    ///    `updates::apply_singbox_update` if the user accepts a
+    ///    core auto-update. The app version is in the path so
+    ///    upgrading the app starts a fresh cache instead of
+    ///    inheriting a stale (potentially older) one.
     /// 3. `<resource_dir>/binaries/sing-box[-<triple>]` (release).
+    ///    On a fresh install we copy this into the cache (step 2
+    ///    path) with `chmod +x` so a /Applications-installed
+    ///    sidecar that landed as 0644 (e.g. macOS install by a
+    ///    different user) becomes exec-able.
     /// 4. Walk upwards from `CARGO_MANIFEST_DIR` to find
     ///    `src-tauri/binaries/sing-box-<triple>` (dev).
     pub fn locate_binary(app: &AppHandle) -> AppResult<PathBuf> {
@@ -156,11 +163,12 @@ impl ProcessManager {
             }
         }
 
-        // User-writable runtime copy (set by updates::apply_singbox_update).
-        // On a fresh install this doesn't exist, so we fall through to
-        // the bundled binary. After an auto-update it wins, which is
-        // exactly what the user wants — the "newer" version is the
-        // one they accepted.
+        // User-writable runtime copy. Set by either the
+        // auto-update (apply_singbox_update) or by our own
+        // populate-from-bundled step below on a fresh install.
+        // The versioned subdir means an app upgrade (which
+        // usually ships a newer bundled) doesn't get stuck
+        // behind a stale cache from the previous app version.
         if let Ok(p) = crate::updates::runtime_bin_path(app) {
             if p.exists() {
                 return Ok(p);
@@ -184,6 +192,19 @@ impl ProcessManager {
             for name in [&exe_name, &plain_name] {
                 let p = resource_dir.join("binaries").join(name);
                 if p.exists() {
+                    // First-launch / post-upgrade: copy the bundled
+                    // into the user-writable runtime cache (with
+                    // +x) so subsequent locate_binary calls (and
+                    // apply_singbox_update) find an exec-able copy
+                    // the running user owns. Without this, a .app
+                    // installed into /Applications by an admin
+                    // user lands with 0644 and we get EACCES on
+                    // execve when the user tries to Connect.
+                    if let Ok(cached) =
+                        crate::updates::populate_cache_from_bundled(app, &p)
+                    {
+                        return Ok(cached);
+                    }
                     return Ok(p);
                 }
             }
