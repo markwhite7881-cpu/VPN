@@ -44,11 +44,14 @@ jobs:
             rust_target: aarch64-apple-darwin
             triple: aarch64-apple-darwin
             goarch: arm64
+            filearch: arm64
             arch_label: aarch64
           - target: x86_64-apple-darwin
             rust_target: x86_64-apple-darwin
             triple: x86_64-apple-darwin
             goarch: amd64
+            # `file` on macOS reports "x86_64" for amd64 (not "amd64")
+            filearch: x86_64
             arch_label: x64
 
     steps:
@@ -102,9 +105,11 @@ jobs:
           # Arch sanity check: confirm the binary we just built is
           # actually the arch we asked for. macos-latest is currently
           # x86_64 Intel — without explicit GOOS/GOARCH we'd silently
-          # produce the wrong binary for the aarch64 job.
-          file "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" | grep -q "${{ matrix.goarch }}" || {
-            echo "::error::built binary is not ${{ matrix.goarch }} — check GOOS/GOARCH cross-compile"
+          # produce the wrong binary for the aarch64 job. `file` on
+          # macOS reports "x86_64" (not "amd64") and "arm64", so the
+          # `filearch` matrix field carries what to actually grep for.
+          file "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" | grep -q "${{ matrix.filearch }}" || {
+            echo "::error::built binary is not ${{ matrix.filearch }} (wanted ${{ matrix.goarch }})"
             file "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}"
             exit 1
           }
