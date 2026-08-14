@@ -614,6 +614,113 @@ pub fn clear_system_proxy() -> AppResult<()> {
 }
 
 
+// --- System proxy management (macOS) --------------------------------
+//
+// macOS exposes its system proxy through `networksetup`. The user
+// can be on any of the active network services (Wi-Fi, Ethernet,
+// Thunderbolt Bridge, ...), so we enumerate all of them and apply
+// the proxy to each one. The cost is a few extra fork+execs but it
+// saves us from racing with the OS to discover which interface is
+// up.
+//
+// We deliberately do NOT set the SOCKS proxy — sing-box's `mixed`
+// listener speaks HTTP(S) on the same port and SOCKS would confuse
+// apps that respect it.
+
+#[cfg(target_os = "macos")]
+fn enabled_network_services() -> Vec<String> {
+    let out = match std::process::Command::new("networksetup")
+        .arg("-listallnetworkservices")
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            log::warn!(
+                "macos-proxy: networksetup -listallnetworkservices failed to spawn: {e}"
+            );
+            return Vec::new();
+        }
+    };
+    if !out.status.success() {
+        log::warn!(
+            "macos-proxy: networksetup -listallnetworkservices exited with {:?}",
+            out.status.code()
+        );
+        return Vec::new();
+    }
+    // The first line of `-listallnetworkservices` is a legend:
+    //   "An asterisk (*) denotes that a network service is disabled."
+    // Disabled services are prefixed with `*` — we skip them. Services
+    // can have spaces in the name (e.g. "USB 10/100/1000 LAN"), so we
+    // keep the whole line as a single token.
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .skip(1)
+        .filter(|l| !l.starts_with('*') && !l.trim().is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn run_networksetup(args: &[&str]) {
+    // Networksetup occasionally fails on individual services
+    // (e.g. "Thunderbolt Bridge" when no bridge exists, or
+    // "Bluetooth PAN" when no PAN is up). That's expected — we
+    // log and move on rather than abort the whole apply.
+    match std::process::Command::new("networksetup").args(args).output() {
+        Ok(o) if !o.status.success() => {
+            log::warn!(
+                "macos-proxy: networksetup {} exited {:?}: {}",
+                args.join(" "),
+                o.status.code(),
+                String::from_utf8_lossy(&o.stderr).trim()
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "macos-proxy: networksetup {} failed to spawn: {e}",
+                args.join(" ")
+            );
+        }
+        Ok(_) => {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
+    let services = enabled_network_services();
+    if services.is_empty() {
+        return Err(AppError::Spawn(
+            "no enabled network services (networksetup returned empty)".into(),
+        ));
+    }
+    let port_s = port.to_string();
+    for svc in &services {
+        log::info!("macos-proxy: applying to {svc}");
+        // Configure the proxy host:port for both HTTP and HTTPS.
+        run_networksetup(&["-setwebproxy", svc, host, &port_s]);
+        run_networksetup(&["-setsecurewebproxy", svc, host, &port_s]);
+        // Actually flip the switches to `on` — without this the
+        // previous two calls just stage the value but the system
+        // proxy stays disabled.
+        run_networksetup(&["-setwebproxystate", svc, "on"]);
+        run_networksetup(&["-setsecurewebproxystate", svc, "on"]);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn clear_system_proxy() -> AppResult<()> {
+    let services = enabled_network_services();
+    for svc in &services {
+        log::info!("macos-proxy: clearing on {svc}");
+        run_networksetup(&["-setwebproxystate", svc, "off"]);
+        run_networksetup(&["-setsecurewebproxystate", svc, "off"]);
+    }
+    Ok(())
+}
+
+
 // --- TUN adapter DNS (Windows only) --------------------------------
 //
 // After sing-box brings the TUN interface up, the OS auto-derives a
