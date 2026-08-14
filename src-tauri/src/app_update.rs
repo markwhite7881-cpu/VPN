@@ -75,7 +75,7 @@ pub struct AppUpdateInfo {
     /// installer from our own GitHub release (controlled) and
     /// TLS to `github.com` already authenticates the channel.
     pub signature: Option<String>,
-    /// The asset name (e.g. `Cloakwire_1.0.9_x64-setup.exe`) for
+    /// The asset name (e.g. `Cloakwire_1.0.10_x64-setup.exe`) for
     /// logging / display.
     pub asset_name: Option<String>,
 }

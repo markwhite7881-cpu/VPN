@@ -1,6 +1,6 @@
 [package]
 name = "cloakwire"
-version = "1.0.9"
+version = "1.0.10"
 description = "Cloakwire Р Р†Р вЂљРІР‚Сњ privacy-first GUI VPN client built on top of sing-box"
 authors = ["Alexey"]
 license = "MIT"
