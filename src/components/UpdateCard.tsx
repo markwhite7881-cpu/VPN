@@ -33,8 +33,6 @@
 // (browser preview), so the card stays quiet in dev.
 
 import { useEffect, useState } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { Download, RefreshCw, ShieldCheck, Cpu } from "lucide-react";
 import { Button } from "./Button";
 import { api, TauriCommandError } from "@/lib/api";
@@ -52,8 +50,17 @@ interface Props {
 }
 
 export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
-  // App shell (Tauri updater) state.
-  const [appUpdate, setAppUpdate] = useState<Update | null>(null);
+  // App shell update state. We don't use `@tauri-apps/plugin-updater`
+  // directly anymore — that plugin's HTTP client (schannel / WinINet
+  // on Windows) fails to decode the GitHub CDN response for some
+  // users, leaving us with a hard "Check failed: error decoding
+  // response body". Instead we talk to our own Rust commands which
+  // use rustls — see `src-tauri/src/app_update.rs`.
+  const [appUpdate, setAppUpdate] = useState<{
+    version: string;
+    downloadUrl: string;
+    notes: string;
+  } | null>(null);
   const [appBusy, setAppBusy] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
 
@@ -78,13 +85,17 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
   const checkAppUpdate = async () => {
     setAppError(null);
     try {
-      const u = await check();
-      setAppUpdate(u ?? null);
+      const info = await api.checkAppUpdate();
+      if (info.available && info.download_url) {
+        setAppUpdate({
+          version: info.version,
+          downloadUrl: info.download_url,
+          notes: info.notes,
+        });
+      } else {
+        setAppUpdate(null);
+      }
     } catch (e) {
-      // `check()` throws when no update is available OR on a
-      // network error. Both look the same to the caller, so we
-      // surface a generic "check failed" message and let the
-      // user retry.
       const msg =
         e instanceof TauriCommandError
           ? `${e.kind}: ${e.message}`
@@ -100,16 +111,11 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
     setAppBusy(true);
     setAppError(null);
     try {
-      // `downloadAndInstall` is from the updater plugin; the
-      // type isn't on `Update` itself but the runtime method
-      // exists. Cast to keep the call site readable.
-      await (appUpdate as unknown as { downloadAndInstall: () => Promise<void> })
-        .downloadAndInstall();
-      // The Tauri updater requires a manual relaunch — it
-      // can't replace the running .exe while it's mapped in.
-      // `relaunch()` (from plugin-process) re-execs the current
-      // binary; on Windows that's typically a one-second flicker.
-      await relaunch();
+      // The Rust side downloads the installer to a temp file,
+      // spawns it with the platform-specific flags, then asks
+      // Tauri to exit so the installer can replace the running
+      // .exe. We don't relaunch here — the installer does that.
+      await api.installAppUpdate(appUpdate.downloadUrl);
     } catch (e) {
       const msg =
         e instanceof TauriCommandError
@@ -214,7 +220,11 @@ function AppUpdateRow({
   onCheck,
   onInstall,
 }: {
-  update: Update | null;
+  update: {
+    version: string;
+    downloadUrl: string;
+    notes: string;
+  } | null;
   busy: boolean;
   error: string | null;
   onCheck: () => void;
@@ -232,7 +242,7 @@ function AppUpdateRow({
                 New version{" "}
                 <span className="font-mono text-primary">{update!.version}</span>{" "}
                 available
-                {update!.body ? (
+                {update!.notes ? (
                   <span className="text-xs text-muted-foreground"> — restart to apply</span>
                 ) : null}
               </>

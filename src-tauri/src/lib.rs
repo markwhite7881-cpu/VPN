@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 
+pub mod app_update;
 pub mod clash_api;
 pub mod commands;
 pub mod config;
@@ -110,6 +111,8 @@ pub fn run() {
             commands::list_processes,
             commands::check_singbox_update,
             commands::apply_singbox_update,
+            commands::check_app_update,
+            commands::install_app_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running singbox-client");

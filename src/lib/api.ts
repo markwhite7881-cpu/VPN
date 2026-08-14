@@ -132,6 +132,26 @@ export const api = {
     }>("check_singbox_update"),
   applySingboxUpdate: (downloadUrl: string) =>
     call<string>("apply_singbox_update", { downloadUrl }),
+
+  // App-shell auto-update. We bypass `@tauri-apps/plugin-updater`
+  // and use our own Rust commands that go through `reqwest` with
+  // rustls. The bundled Tauri updater's HTTP client (schannel /
+  // WinINet on Windows) fails with "error decoding response body"
+  // for some users on the GitHub CDN, while rustls handles the
+  // same URL fine. See `src-tauri/src/app_update.rs` for the
+  // long-form rationale.
+  checkAppUpdate: () =>
+    call<{
+      version: string;
+      available: boolean;
+      current_version: string;
+      notes: string;
+      download_url: string | null;
+      signature: string | null;
+      asset_name: string | null;
+    }>("check_app_update"),
+  installAppUpdate: (downloadUrl: string) =>
+    call<void>("install_app_update", { downloadUrl }),
 };
 
 export { TauriCommandError };

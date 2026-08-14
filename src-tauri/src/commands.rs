@@ -787,6 +787,29 @@ pub async fn apply_singbox_update(app: AppHandle, download_url: String) -> AppRe
     crate::updates::apply_singbox_update(app, download_url).await
 }
 
+/// Custom app-shell update check. Bypasses `tauri-plugin-updater`
+/// entirely and uses our own `reqwest` (rustls) client. See
+/// `app_update.rs` for the rationale — the bundled Tauri updater
+/// fails with "error decoding response body" on a small but real
+/// subset of Windows installs because it uses schannel/WinINet,
+/// not rustls, and something in that stack doesn't like the
+/// GitHub CDN's signed-URL response shape.
+#[tauri::command]
+pub async fn check_app_update(app: AppHandle) -> AppResult<crate::app_update::AppUpdateInfo> {
+    crate::app_update::check_app_update(&app).await
+}
+
+/// Custom app-shell install. Downloads the platform installer to
+/// the system temp dir, spawns it with the right flags, then asks
+/// Tauri to exit so the installer can replace the running .exe.
+#[tauri::command]
+pub async fn install_app_update(
+    app: AppHandle,
+    download_url: String,
+) -> AppResult<()> {
+    crate::app_update::install_app_update(app, download_url).await
+}
+
 #[cfg(test)]
 mod process_tests {
     use super::*;

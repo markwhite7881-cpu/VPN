@@ -1,7 +1,7 @@
 [package]
 name = "cloakwire"
-version = "1.0.8"
-description = "Cloakwire — privacy-first GUI VPN client built on top of sing-box"
+version = "1.0.9"
+description = "Cloakwire вЂ” privacy-first GUI VPN client built on top of sing-box"
 authors = ["Alexey"]
 license = "MIT"
 repository = "https://github.com/markwhite7881-cpu/cloakwire"
@@ -75,7 +75,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # HTTP client (used by the Clash API module)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
-# WebSocket client (used by the traffic stream in Этап 5)
+# WebSocket client (used by the traffic stream in Р­С‚Р°Рї 5)
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
@@ -101,7 +101,7 @@ flate2 = "1"
 
 # Process enumeration (used by the routing process-name picker to
 # show currently-running executables the user can match against).
-# Cross-platform — we only need name + pid, not Windows-specific
+# Cross-platform вЂ” we only need name + pid, not Windows-specific
 # extended process info, so no per-platform features required.
 # `system` feature is required for Process / Pid / System.
 # NB: kept in the platform-agnostic [dependencies] block above so
@@ -120,7 +120,7 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 winreg = "0.52"
 
 [dev-dependencies]
-# Used by the Этап 8 dry-run example to fetch a real subscription URL.
+# Used by the Р­С‚Р°Рї 8 dry-run example to fetch a real subscription URL.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [profile.release]
