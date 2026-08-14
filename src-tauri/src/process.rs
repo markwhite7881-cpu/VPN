@@ -187,26 +187,53 @@ impl ProcessManager {
             "sing-box".to_string()
         };
 
-        // Release: resource_dir/binaries/...
+        // Release: resource_dir/binaries/... AND alongside the
+        // main executable. The two locations exist because of how
+        // Tauri 2 / cargo-bundle lay out sidecars per platform:
+        //
+        //   * Windows: <bundle>/binaries/sing-box.exe, accessed
+        //     via resource_dir.
+        //   * Linux .deb / .AppImage: /usr/bin/sing-box (same
+        //     dir as the main binary), accessed via
+        //     current_exe().parent().
+        //   * macOS .app: Cloakwire.app/Contents/MacOS/sing-box
+        //     (same dir as the main binary), accessed via
+        //     current_exe().parent(). `resource_dir` here is
+        //     Contents/Resources, which doesn't contain binaries
+        //     for the externalBin case, so the resource_dir
+        //     lookup on macOS is always empty.
+        //
+        // We try both layouts so a single binary works on every
+        // platform without `#[cfg]` branches.
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
         if let Ok(resource_dir) = app.path().resource_dir() {
             for name in [&exe_name, &plain_name] {
-                let p = resource_dir.join("binaries").join(name);
-                if p.exists() {
-                    // First-launch / post-upgrade: copy the bundled
-                    // into the user-writable runtime cache (with
-                    // +x) so subsequent locate_binary calls (and
-                    // apply_singbox_update) find an exec-able copy
-                    // the running user owns. Without this, a .app
-                    // installed into /Applications by an admin
-                    // user lands with 0644 and we get EACCES on
-                    // execve when the user tries to Connect.
-                    if let Ok(cached) =
-                        crate::updates::populate_cache_from_bundled(app, &p)
-                    {
-                        return Ok(cached);
-                    }
-                    return Ok(p);
+                candidates.push(resource_dir.join("binaries").join(name));
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = exe.parent() {
+                for name in [&exe_name, &plain_name] {
+                    candidates.push(parent.join(name));
                 }
+            }
+        }
+        for p in &candidates {
+            if p.exists() {
+                // First-launch / post-upgrade: copy the bundled
+                // into the user-writable runtime cache (with
+                // +x) so subsequent locate_binary calls (and
+                // apply_singbox_update) find an exec-able copy
+                // the running user owns. Without this, a .app
+                // installed into /Applications by an admin
+                // user lands with 0644 and we get EACCES on
+                // execve when the user tries to Connect.
+                if let Ok(cached) =
+                    crate::updates::populate_cache_from_bundled(app, p)
+                {
+                    return Ok(cached);
+                }
+                return Ok(p.clone());
             }
         }
 
