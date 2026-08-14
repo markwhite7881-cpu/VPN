@@ -141,11 +141,13 @@ pub async fn check_singbox_update(app: &AppHandle) -> AppResult<SingboxUpdateInf
     // comparison against `sing-box version` output ("1.15.0").
     let latest = release.tag_name.trim_start_matches('v').to_string();
 
-    // 2) Find the Windows-amd64 asset. sing-box uses
-    // `sing-box-VERSION-windows-amd64.zip` in the .zip. There's
-    // also an archive without the suffix in some pre-releases —
-    // match the windows-amd64 .zip specifically.
-    let target = pick_windows_amd64_asset(&release.assets);
+    // 2) Find the asset for the current platform. sing-box ships
+    // per-OS archives named `sing-box-VERSION-<os>-<arch>.<ext>`
+    // where ext is `.zip` on Windows and `.tar.gz` everywhere else.
+    // Picking the Windows asset on macOS/Linux is the bug behind
+    // "expected sing-box after extraction, but it's missing" (the
+    // Windows zip contains sing-box.exe; we look for sing-box).
+    let target = pick_platform_asset(&release.assets);
 
     let Some(asset) = target else {
         return Ok(SingboxUpdateInfo::not_available(current, latest));
@@ -282,6 +284,48 @@ fn pick_windows_amd64_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
     assets
         .iter()
         .find(|a| a.name.ends_with(".zip") && a.name.contains("windows-amd64"))
+}
+
+/// Like `pick_windows_amd64_asset` but platform-aware. sing-box
+/// release archives are named `sing-box-VERSION-<os>-<arch>.<ext>`
+/// with `.zip` on Windows and `.tar.gz` everywhere else. The
+/// `<arch>` part on Windows is `amd64` or `arm64`; on macOS /
+/// Linux it's the same. We pick the asset that matches the host's
+/// OS + arch tuple (per the `cfg!` block below), preferring
+/// extension-specific matches for Windows (`.zip`) and Linux /
+/// macOS (`.tar.gz`).
+///
+/// On platforms we don't have a bundled binary for (e.g. Linux
+/// ARM64 on a system that shipped an x86_64 build), this returns
+/// None and the UI shows "no update available" — the bundled
+/// binary keeps working. The user can still download a different
+/// arch manually if they need to.
+fn pick_platform_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
+    // (os, arch, extension) — order matters; the first matching
+    // asset wins. We support the two arches sing-box ships per OS.
+    let candidates: &[(&str, &str, &str)] = &[
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        ("darwin", "arm64", ".tar.gz"),
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        ("darwin", "amd64", ".tar.gz"),
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        ("linux", "amd64", ".tar.gz"),
+        #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+        ("linux", "arm64", ".tar.gz"),
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        ("windows", "amd64", ".zip"),
+        #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+        ("windows", "arm64", ".zip"),
+    ];
+
+    for (os, arch, ext) in candidates {
+        // e.g. "sing-box-1.13.18-linux-amd64.tar.gz"
+        let pattern = format!("-{os}-{arch}{ext}");
+        if let Some(a) = assets.iter().find(|a| a.name.ends_with(&pattern)) {
+            return Some(a);
+        }
+    }
+    None
 }
 
 /// Compare two sing-box version strings. Returns true if `a` is
