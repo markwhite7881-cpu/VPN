@@ -698,13 +698,17 @@ pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
     for svc in &services {
         log::info!("macos-proxy: applying to {svc}");
         // Configure the proxy host:port for both HTTP and HTTPS.
-        run_networksetup(&["-setwebproxy", svc, host, &port_s]);
-        run_networksetup(&["-setsecurewebproxy", svc, host, &port_s]);
+        // `svc` is `&String` (from `for svc in &services`); we deref
+        // to `&str` so the slice literal type-checks against
+        // `run_networksetup(&[&str])`. `port_s.as_str()` is the same
+        // trick for the owned `port_s`.
+        run_networksetup(&["-setwebproxy", svc.as_str(), host, port_s.as_str()]);
+        run_networksetup(&["-setsecurewebproxy", svc.as_str(), host, port_s.as_str()]);
         // Actually flip the switches to `on` — without this the
         // previous two calls just stage the value but the system
         // proxy stays disabled.
-        run_networksetup(&["-setwebproxystate", svc, "on"]);
-        run_networksetup(&["-setsecurewebproxystate", svc, "on"]);
+        run_networksetup(&["-setwebproxystate", svc.as_str(), "on"]);
+        run_networksetup(&["-setsecurewebproxystate", svc.as_str(), "on"]);
     }
     Ok(())
 }
@@ -714,8 +718,9 @@ pub fn clear_system_proxy() -> AppResult<()> {
     let services = enabled_network_services();
     for svc in &services {
         log::info!("macos-proxy: clearing on {svc}");
-        run_networksetup(&["-setwebproxystate", svc, "off"]);
-        run_networksetup(&["-setsecurewebproxystate", svc, "off"]);
+        // Same `&String -> &str` deref trick as in apply_system_proxy.
+        run_networksetup(&["-setwebproxystate", svc.as_str(), "off"]);
+        run_networksetup(&["-setsecurewebproxystate", svc.as_str(), "off"]);
     }
     Ok(())
 }
