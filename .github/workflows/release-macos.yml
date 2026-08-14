@@ -73,15 +73,16 @@ jobs:
         # we currently ship (sing-box version 1.14.0-lx.24) was a
         # hand-built SagerNet source build with `with_xhttp` and a few
         # other custom tags, so we mirror that here for macOS.
-        # CGO_ENABLED=0 → no Apple-specific HTTP/TLS engine (those
-        # need osxcross); we get a portable, cross-compiled binary
-        # that still speaks xhttp (which is pure-Go in sing-box).
+        # CGO is enabled (the cronet-go / Apple HTTP engine
+        # imports need it). We rely on the macos-latest runner
+        # having the Mac toolchain; cross-compile from Linux is
+        # not viable here without osxcross.
         run: |
           set -e
           git clone --depth 1 --branch v1.13.18 https://github.com/SagerNet/sing-box.git /tmp/sing-box-src
           cd /tmp/sing-box-src
           BUILD_TAGS="with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound"
-          CGO_ENABLED=0 go build \
+          CGO_ENABLED=1 go build \
             -tags "$BUILD_TAGS" \
             -trimpath \
             -ldflags "-s -w -buildid=" \
