@@ -31,6 +31,8 @@
 //! limit. If we start getting throttled, add a 1h in-memory cache
 //! keyed by URL.
 
+use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -345,25 +347,13 @@ struct GithubAsset {
     size: u64,
 }
 
-/// Pick the Windows amd64 .zip from the asset list. sing-box
-/// tags them as `sing-box-VERSION-windows-amd64.zip` (also
-/// `windows-amd64-cgo.zip` historically). We match the
-/// `windows-amd64` substring and the `.zip` suffix; this
-/// gracefully survives upstream's naming variations.
-fn pick_windows_amd64_asset(assets: &[GithubAsset]) -> Option<&GithubAsset> {
-    assets
-        .iter()
-        .find(|a| a.name.ends_with(".zip") && a.name.contains("windows-amd64"))
-}
-
-/// Like `pick_windows_amd64_asset` but platform-aware. sing-box
-/// release archives are named `sing-box-VERSION-<os>-<arch>.<ext>`
-/// with `.zip` on Windows and `.tar.gz` everywhere else. The
-/// `<arch>` part on Windows is `amd64` or `arm64`; on macOS /
-/// Linux it's the same. We pick the asset that matches the host's
-/// OS + arch tuple (per the `cfg!` block below), preferring
-/// extension-specific matches for Windows (`.zip`) and Linux /
-/// macOS (`.tar.gz`).
+/// Platform-aware asset picker. sing-box release archives are named
+/// `sing-box-VERSION-<os>-<arch>.<ext>` with `.zip` on Windows and
+/// `.tar.gz` everywhere else. The `<arch>` part on Windows is
+/// `amd64` or `arm64`; on macOS / Linux it's the same. We pick the
+/// asset that matches the host's OS + arch tuple (per the `cfg!`
+/// block below), preferring extension-specific matches for Windows
+/// (`.zip`) and Linux / macOS (`.tar.gz`).
 ///
 /// On platforms we don't have a bundled binary for (e.g. Linux
 /// ARM64 on a system that shipped an x86_64 build), this returns
@@ -429,56 +419,136 @@ fn version_is_newer(a: &str, b: &str) -> bool {
 }
 
 /// Extract `sing-box.exe` (or `sing-box` on non-Windows) from a
-/// sing-box release zip into `out_dir`. Returns the path to the
+/// sing-box release archive into `out_dir`. Returns the path to the
 /// extracted binary.
 ///
-/// The sing-box release zip is a flat archive containing exactly
-/// one binary. We don't pull in the `zip` crate to keep the
-/// dependency surface small; instead we use `std::process::Command`
-/// to invoke the system `tar` (which on Windows 10+ and modern
-/// Linux/macOS handles .zip out of the box).
-fn extract_singbox_from_zip(zip_path: &std::path::Path, out_dir: &std::path::Path) -> AppResult<PathBuf> {
-    // libarchive's `tar` (the BSD one shipped on macOS / Windows 10+)
-    // handles .zip via the `-a` flag (auto-detect format). On Linux
-    // it's GNU tar, also handles .zip out of the box.
-    let status = std::process::Command::new("tar")
-        .arg("-xaf")
-        .arg(zip_path)
-        .arg("-C")
-        .arg(out_dir)
-        .status()
-        .map_err(|e| AppError::Spawn(format!("`tar` not available: {e}")))?;
-    if !status.success() {
-        return Err(AppError::Spawn(format!(
-            "tar extract failed with exit code {:?}",
-            status.code()
-        )));
-    }
-    // After extraction, the binary is at `out_dir/sing-box.exe`
-    // (or `out_dir/sing-box` on Unix). BUT: SagerNet archives
-    // since ~1.12 ship nested in a versioned subdirectory
-    // (e.g. `out_dir/sing-box-1.13.18-darwin-arm64/sing-box`),
-    // not as a flat file. Older releases were flat. So we
-    // check the top level first, then walk one level of
-    // subdirectories for the binary.
+/// The sing-box release archive is mostly flat — a single binary
+/// somewhere inside — but the exact layout has varied over time:
+///
+///   - Older (<1.12): top level flat, e.g. `zip_root/sing-box.exe`
+///   - 1.12+: nested in a per-target subdir, e.g.
+///     `zip_root/sing-box-1.13.18-darwin-arm64/sing-box`
+///   - Always: exactly one binary per archive, named either
+///     `sing-box.exe` (Windows) or `sing-box` (macOS / Linux).
+///
+/// We use Rust-native `zip` and `tar`+`flate2` crates for the actual
+/// extraction instead of shelling out to system `tar`. The
+/// Windows 10+ shipped `bsdtar` fails on some SagerNet release
+/// .zip archives with exit code 1 (verified via friend: a 20.1 MB
+/// v1.14.0-beta.14 download hit "tar extract failed with exit code
+/// Some(1)" and the update never applied). Pure-Rust extraction
+/// is deterministic across platforms and immune to this.
+fn extract_singbox_from_zip(archive_path: &std::path::Path, out_dir: &std::path::Path) -> AppResult<PathBuf> {
     let name = RUNTIME_BIN_NAME;
-    let direct = out_dir.join(name);
-    if direct.exists() {
-        return Ok(direct);
+    let path_lower = archive_path
+        .to_string_lossy()
+        .to_ascii_lowercase();
+
+    if path_lower.ends_with(".zip") {
+        extract_zip(archive_path, out_dir, name)
+    } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
+        extract_tar_gz(archive_path, out_dir, name)
+    } else {
+        Err(AppError::Spawn(format!(
+            "unsupported archive format: {}",
+            archive_path.display()
+        )))
     }
-    if let Ok(entries) = std::fs::read_dir(out_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let candidate = path.join(name);
-                if candidate.exists() {
-                    return Ok(candidate);
-                }
-            }
+}
+
+/// Extract the first entry whose path matches `name` (either flat
+/// at the top of the archive or inside one subdirectory) into
+/// `out_dir/<name>`. Returns the path of the written file.
+fn extract_zip(archive_path: &std::path::Path, out_dir: &std::path::Path, name: &str) -> AppResult<PathBuf> {
+    let f = File::open(archive_path)
+        .map_err(|e| AppError::Spawn(format!("open zip: {e}")))?;
+    let mut zip = zip::ZipArchive::new(BufReader::new(f))
+        .map_err(|e| AppError::Spawn(format!("read zip: {e}")))?;
+
+    // Find the binary by exact basename match. The `zip` crate
+    // exposes `is_file()` (true for stored files, false for dirs)
+    // and `enclosed_name()` (safe path — strips `../` etc.). We
+    // look for an entry whose final path component equals `name`,
+    // which covers both flat and one-level-nested layouts.
+    let target_basename = std::path::Path::new(name);
+    let dest = out_dir.join(name);
+
+    let mut found_idx: Option<usize> = None;
+    for i in 0..zip.len() {
+        let entry = zip
+            .by_index(i)
+            .map_err(|e| AppError::Spawn(format!("zip entry {i}: {e}")))?;
+        if !entry.is_file() {
+            continue;
+        }
+        let Some(safe) = entry.enclosed_name() else {
+            continue;
+        };
+        if safe.file_name() == target_basename.file_name() {
+            found_idx = Some(i);
+            break;
         }
     }
-    Err(AppError::Spawn(format!(
-        "expected {} after extraction (also looked in subdirs), but it's missing",
-        direct.display()
-    )))
+    let idx = found_idx.ok_or_else(|| {
+        AppError::Spawn(format!("expected {name} in zip, but it's missing"))
+    })?;
+    let mut entry = zip
+        .by_index(idx)
+        .map_err(|e| AppError::Spawn(format!("zip entry {idx}: {e}")))?;
+    let mut out = File::create(&dest)
+        .map_err(|e| AppError::Spawn(format!("create {}: {e}", dest.display())))?;
+    std::io::copy(&mut entry, &mut out)
+        .map_err(|e| AppError::Spawn(format!("copy zip entry: {e}")))?;
+    log::info!(
+        "updates: extracted {} ({} bytes) -> {}",
+        entry.name(),
+        entry.size(),
+        dest.display()
+    );
+    Ok(dest)
+}
+
+/// Extract the first entry whose basename matches `name` from a
+/// `.tar.gz` (or `.tgz`) into `out_dir/<name>`. Same flat-or-nested
+/// tolerance as `extract_zip`. The `tar` crate is safe to use on
+/// untrusted archives — it does not follow symlinks, and we re-check
+/// the basename on every entry to avoid path-traversal surprises.
+fn extract_tar_gz(archive_path: &std::path::Path, out_dir: &std::path::Path, name: &str) -> AppResult<PathBuf> {
+    let f = File::open(archive_path)
+        .map_err(|e| AppError::Spawn(format!("open tar.gz: {e}")))?;
+    let gz = flate2::read::GzDecoder::new(BufReader::new(f));
+    let mut tar = tar::Archive::new(gz);
+
+    let target_basename = std::path::Path::new(name);
+    let dest = out_dir.join(name);
+    let mut found = false;
+    for entry in tar
+        .entries()
+        .map_err(|e| AppError::Spawn(format!("read tar entries: {e}")))?
+    {
+        let mut entry = entry.map_err(|e| AppError::Spawn(format!("tar entry: {e}")))?;
+        let entry_path = entry
+            .path()
+            .map_err(|e| AppError::Spawn(format!("tar entry path: {e}")))?
+            .into_owned();
+        if entry_path.file_name() == target_basename.file_name() {
+            let mut out = File::create(&dest)
+                .map_err(|e| AppError::Spawn(format!("create {}: {e}", dest.display())))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| AppError::Spawn(format!("copy tar entry: {e}")))?;
+            log::info!(
+                "updates: extracted {} -> {}",
+                entry_path.display(),
+                dest.display()
+            );
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        return Err(AppError::Spawn(format!(
+            "expected {name} in tar.gz, but it's missing"
+        )));
+    }
+    Ok(dest)
 }
