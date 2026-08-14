@@ -78,16 +78,17 @@ jobs:
         # that still speaks xhttp (which is pure-Go in sing-box).
         run: |
           set -e
-          go install github.com/sagernet/sing-box/cmd/sing-box@latest
+          git clone --depth 1 --branch v1.13.18 https://github.com/SagerNet/sing-box.git /tmp/sing-box-src
+          cd /tmp/sing-box-src
           BUILD_TAGS="with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound"
-          go build \
+          CGO_ENABLED=0 go build \
             -tags "$BUILD_TAGS" \
             -trimpath \
             -ldflags "-s -w -buildid=" \
-            -o "src-tauri/binaries/sing-box-${{ matrix.triple }}" \
+            -o "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" \
             ./cmd/sing-box
-          chmod +x "src-tauri/binaries/sing-box-${{ matrix.triple }}"
-          ./src-tauri/binaries/sing-box-${{ matrix.triple }} version
+          chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}"
+          "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.triple }}" version
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
