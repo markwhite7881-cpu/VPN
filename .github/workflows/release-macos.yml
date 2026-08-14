@@ -59,6 +59,36 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build sing-box from SagerNet source with custom tags
+        # The SagerNet release tarballs do NOT include the
+        # `with_xhttp` build tag (we confirmed empirically: 1.14.0-beta.14
+        # rejects `transport: "xhttp"` as `unknown field`). The xhttp
+        # VLESS transport IS in the SagerNet source — it just isn't
+        # included in their official release CI. The Windows sidecar
+        # we currently ship (sing-box version 1.14.0-lx.24) was a
+        # hand-built SagerNet source build with `with_xhttp` and a few
+        # other custom tags, so we mirror that here for macOS.
+        # CGO_ENABLED=0 → no Apple-specific HTTP/TLS engine (those
+        # need osxcross); we get a portable, cross-compiled binary
+        # that still speaks xhttp (which is pure-Go in sing-box).
+        run: |
+          set -e
+          go install github.com/sagernet/sing-box/cmd/sing-box@latest
+          BUILD_TAGS="with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound"
+          go build \
+            -tags "$BUILD_TAGS" \
+            -trimpath \
+            -ldflags "-s -w -buildid=" \
+            -o "src-tauri/binaries/sing-box-${{ matrix.triple }}" \
+            ./cmd/sing-box
+          chmod +x "src-tauri/binaries/sing-box-${{ matrix.triple }}"
+          ./src-tauri/binaries/sing-box-${{ matrix.triple }} version
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
