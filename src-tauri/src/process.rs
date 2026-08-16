@@ -448,10 +448,17 @@ impl ProcessManager {
         Arc::clone(&self.traffic)
     }
 
-    /// Force-clear the manager state. Used by the `reset_state` command
-    /// for manual recovery; the spawned child (if any) is dropped, which
-    /// triggers `kill_on_drop` on the underlying Command.
-    pub async fn reset(&self) {
+    async fn reset_with_proxy_cleanup<F>(&self, clear_proxy: F)
+    where
+        F: FnOnce() -> AppResult<()>,
+    {
+        if let Err(error) = clear_proxy() {
+            self.push_log(
+                LogStream::System,
+                format!("proxy: failed to clear during reset ({error})"),
+            )
+            .await;
+        }
         *self.child.lock().await = None;
         *self.status.lock().await = StatusReport::default();
         *self.started_at.lock().await = None;
@@ -459,6 +466,13 @@ impl ProcessManager {
         *self.controller_url.lock().await = None;
         self.traffic.stop().await;
         self.push_log(LogStream::System, "process manager state reset").await;
+    }
+
+    /// Force-clear the manager state. Used by the `reset_state` command
+    /// for manual recovery; the spawned child (if any) is dropped, which
+    /// triggers `kill_on_drop` on the underlying Command.
+    pub async fn reset(&self) {
+        self.reset_with_proxy_cleanup(clear_system_proxy).await;
     }
 
     /// Update the StatusReport after a process has exited.
@@ -1079,6 +1093,29 @@ fn is_linux_capability_name(capability: &str) -> bool {
             | "cap_bpf"
             | "cap_checkpoint_restore"
     )
+}
+
+#[cfg(test)]
+mod reset_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn reset_clears_proxy_before_forgetting_process_state() {
+        let manager = ProcessManager::new();
+        manager.status.lock().await.status = Status::Running;
+
+        manager
+            .reset_with_proxy_cleanup(|| {
+                assert_eq!(
+                    manager.status.try_lock().expect("status lock is available").status,
+                    Status::Running
+                );
+                Ok(())
+            })
+            .await;
+
+        assert_eq!(manager.snapshot_status().await.status, Status::Stopped);
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

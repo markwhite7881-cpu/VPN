@@ -252,21 +252,199 @@ pub async fn check_app_update(_app: AppHandle) -> AppResult<AppUpdateInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let available = current_platform()
         .and_then(|platform| platform_entry_for(&manifest, platform))
-        .is_some() && version_is_newer(&manifest.version, &current_version);
+        .and_then(|entry| validate_release_asset_url(&entry.url).ok())
+        .and_then(|url| installer_kind_from_url(&url).ok())
+        .is_some_and(|kind| kind.is_supported_on_current_platform())
+        && version_is_newer(&manifest.version, &current_version);
     Ok(AppUpdateInfo { version: manifest.version, current_version, available, notes: manifest.notes })
 }
 
-fn installer_extension(url: &Url) -> AppResult<&str> {
-    Path::new(url.path()).extension().and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty() && value.len() <= 10 && value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
-        .ok_or_else(|| app_error("validated artifact URL has no safe filename extension"))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallerKind {
+    Exe,
+    Msi,
+    Deb,
+    AppImage,
+    Dmg,
 }
 
-fn verified_installer_path(version: &str, extension: &str) -> PathBuf {
-    std::env::temp_dir().join("cloakwire-update").join(format!("cloakwire-{version}-{}.{}", uuid::Uuid::new_v4(), extension))
+impl InstallerKind {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Exe => "exe",
+            Self::Msi => "msi",
+            Self::Deb => "deb",
+            Self::AppImage => "AppImage",
+            Self::Dmg => "dmg",
+        }
+    }
+
+    fn is_supported_on_current_platform(self) -> bool {
+        match self {
+            Self::Exe | Self::Msi => cfg!(windows),
+            Self::Deb | Self::AppImage => cfg!(target_os = "linux"),
+            Self::Dmg => cfg!(target_os = "macos"),
+        }
+    }
 }
 
-pub async fn install_app_update(_app: AppHandle, expected_version: Option<String>) -> AppResult<()> {
+fn installer_kind_from_asset_name(asset_name: &str) -> AppResult<InstallerKind> {
+    if asset_name.is_empty()
+        || Path::new(asset_name).file_name().and_then(|name| name.to_str()) != Some(asset_name)
+        || !asset_name.starts_with("Cloakwire_")
+    {
+        return Err(app_error("artifact name is not a recognized Cloakwire installer"));
+    }
+
+    if asset_name.ends_with(".AppImage") {
+        return Ok(InstallerKind::AppImage);
+    }
+    match Path::new(asset_name).extension().and_then(|value| value.to_str()) {
+        Some("exe") => Ok(InstallerKind::Exe),
+        Some("msi") => Ok(InstallerKind::Msi),
+        Some("deb") => Ok(InstallerKind::Deb),
+        Some("dmg") => Ok(InstallerKind::Dmg),
+        _ => Err(app_error("artifact name has an unsupported installer kind")),
+    }
+}
+
+fn installer_kind_from_url(url: &Url) -> AppResult<InstallerKind> {
+    let asset_name = Path::new(url.path())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| app_error("validated artifact URL has no asset filename"))?;
+    installer_kind_from_asset_name(asset_name)
+}
+
+fn verified_installer_path(version: &str, kind: InstallerKind) -> PathBuf {
+    std::env::temp_dir().join("cloakwire-update").join(format!(
+        "cloakwire-{version}-{}.{}",
+        uuid::Uuid::new_v4(),
+        kind.extension()
+    ))
+}
+
+fn spawn_installer_and_exit(app: &AppHandle, kind: InstallerKind, path: &Path) -> AppResult<()> {
+    if !kind.is_supported_on_current_platform() {
+        return Err(app_error("verified installer kind is incompatible with this platform"));
+    }
+
+    #[cfg(windows)]
+    {
+        let mut command = match kind {
+            InstallerKind::Exe => std::process::Command::new(path),
+            InstallerKind::Msi => {
+                let mut command = std::process::Command::new("msiexec");
+                command.arg("/i").arg(path);
+                command
+            }
+            _ => return Err(app_error("verified installer kind is incompatible with Windows")),
+        };
+        command.spawn().map_err(|error| AppError::Spawn(format!("launch verified installer {}: {error}", path.display())))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut command = match kind {
+            InstallerKind::Deb => {
+                let mut command = std::process::Command::new("pkexec");
+                command.arg("dpkg").arg("-i").arg(path);
+                command
+            }
+            InstallerKind::AppImage => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|error| AppError::Spawn(format!("make AppImage executable {}: {error}", path.display())))?;
+                std::process::Command::new(path)
+            }
+            _ => return Err(app_error("verified installer kind is incompatible with Linux")),
+        };
+        command.spawn().map_err(|error| AppError::Spawn(format!("launch verified installer {}: {error}", path.display())))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if kind != InstallerKind::Dmg {
+            return Err(app_error("verified installer kind is incompatible with macOS"));
+        }
+        let log_path = path.with_extension("update-helper.log");
+        let helper = r#"set -eu
+exec >> "$2" 2>&1
+mount_point=$(mktemp -d /tmp/cloakwire-update.XXXXXX)
+mounted=0
+backup_moved=0
+cleanup() {
+  set +e
+  if [ "$mounted" = 1 ]; then hdiutil detach "$mount_point"; fi
+  rmdir "$mount_point"
+}
+rollback() {
+  if [ "$backup_moved" = 1 ]; then
+    rm -rf /Applications/Cloakwire.app || return 1
+    mv "$backup" /Applications/Cloakwire.app || return 1
+    backup_moved=0
+  fi
+}
+fail_after_backup() {
+  message="$1"
+  echo "$message"
+  if ! rollback; then echo 'rollback of Cloakwire.app failed'; fi
+  if [ "$mounted" = 1 ]; then
+    if hdiutil detach "$mount_point"; then mounted=0; else echo 'DMG detach failed after rollback'; fi
+  fi
+  exit 1
+}
+trap cleanup EXIT
+hdiutil attach -nobrowse -mountpoint "$mount_point" "$1"
+mounted=1
+if [ ! -d "$mount_point/Cloakwire.app" ]; then
+  echo 'Cloakwire.app is missing from verified DMG'
+  exit 1
+fi
+temporary=/Applications/.Cloakwire.app.update.$$
+backup=/Applications/Cloakwire.app.previous.$$
+if ! ditto "$mount_point/Cloakwire.app" "$temporary"; then
+  echo 'copy of Cloakwire.app from verified DMG failed'
+  exit 1
+fi
+if [ -e /Applications/Cloakwire.app ]; then
+  if ! mv /Applications/Cloakwire.app "$backup"; then
+    echo 'backup of existing Cloakwire.app failed'
+    exit 1
+  fi
+  backup_moved=1
+fi
+if ! mv "$temporary" /Applications/Cloakwire.app; then
+  fail_after_backup 'replacement of Cloakwire.app failed'
+fi
+if ! hdiutil detach "$mount_point"; then
+  fail_after_backup 'DMG detach failed after replacement'
+fi
+mounted=0
+if [ "$backup_moved" = 1 ]; then
+  if ! rm -rf "$backup"; then echo "updated app installed but preserved backup at $backup"; fi
+fi
+rmdir "$mount_point" || echo "updated app installed but cleanup directory remains at $mount_point"
+trap - EXIT
+"#;
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(helper)
+            .arg("cloakwire-update-helper")
+            .arg(path)
+            .arg(&log_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| AppError::Spawn(format!("launch macOS update helper {}: {error}", path.display())))?;
+    }
+
+    app.exit(0);
+    Ok(())
+}
+
+pub async fn install_app_update(app: AppHandle, expected_version: Option<String>) -> AppResult<()> {
     let manifest = fetch_manifest().await?;
     ensure_expected_version(expected_version.as_deref(), &manifest.version)?;
     let current_version = env!("CARGO_PKG_VERSION");
@@ -277,25 +455,56 @@ pub async fn install_app_update(_app: AppHandle, expected_version: Option<String
     let entry = platform_entry_for(&manifest, platform).ok_or_else(|| app_error("manifest has no installer for this platform"))?;
     let artifact_url = validate_release_asset_url(&entry.url)?;
     let signature = decode_manifest_signature(&entry.signature)?;
-    let extension = installer_extension(&artifact_url)?;
+    let installer_kind = installer_kind_from_url(&artifact_url)?;
+    if !installer_kind.is_supported_on_current_platform() {
+        return Err(app_error("artifact installer kind is incompatible with this platform"));
+    }
     let client = http_client(Duration::from_secs(600))?;
     let artifact = get_trusted(&client, artifact_url, true).await?.bytes().await
         .map_err(|error| AppError::Network(format!("installer body: {error}")))?;
     verify_update_signature(UPDATER_PUBLIC_KEY, &artifact, &signature)?;
 
-    let path = verified_installer_path(&manifest.version, extension);
+    let path = verified_installer_path(&manifest.version, installer_kind);
     let parent = path.parent().expect("verified installer path has parent");
     std::fs::create_dir_all(parent)?;
     std::fs::write(&path, artifact)?;
-    Err(AppError::Spawn(format!(
-        "verified installer staged at {}; execution is intentionally deferred until platform dispatch is implemented",
-        path.display()
-    )))
+    spawn_installer_and_exit(&app, installer_kind, &path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_kind_is_derived_from_validated_asset_name() {
+        assert_eq!(
+            installer_kind_from_asset_name("Cloakwire_1.2.1_amd64.deb").unwrap(),
+            InstallerKind::Deb
+        );
+        assert_eq!(
+            installer_kind_from_asset_name("Cloakwire_1.2.1_amd64.AppImage").unwrap(),
+            InstallerKind::AppImage
+        );
+        assert_eq!(
+            installer_kind_from_asset_name("Cloakwire_1.2.1_x64-setup.exe").unwrap(),
+            InstallerKind::Exe
+        );
+        assert_eq!(
+            installer_kind_from_asset_name("Cloakwire_1.2.1_x64.msi").unwrap(),
+            InstallerKind::Msi
+        );
+        assert_eq!(
+            installer_kind_from_asset_name("Cloakwire_1.2.1_aarch64.dmg").unwrap(),
+            InstallerKind::Dmg
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_or_unsafe_installer_asset_names() {
+        assert!(installer_kind_from_asset_name("Cloakwire_1.2.1.tar.gz").is_err());
+        assert!(installer_kind_from_asset_name("../Cloakwire_1.2.1_amd64.deb").is_err());
+        assert!(installer_kind_from_asset_name("other_1.2.1_amd64.deb").is_err());
+    }
 
     #[test]
     fn accepts_tagged_manifest_redirect_only() {
