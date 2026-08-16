@@ -35,7 +35,6 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
   // sing-box (custom Rust) state.
   const [sbUpdate, setSbUpdate] = useState<{
     latest: string;
-    downloadUrl: string | null;
     sizeBytes: number;
   } | null>(null);
   const [sbBusy, setSbBusy] = useState(false);
@@ -93,10 +92,9 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
     setSbError(null);
     try {
       const info = await api.checkSingboxUpdate();
-      if (info.available && info.download_url) {
+      if (info.available) {
         setSbUpdate({
           latest: info.latest_version,
-          downloadUrl: info.download_url,
           sizeBytes: info.size_bytes,
         });
       } else {
@@ -114,11 +112,11 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
   };
 
   const installSbUpdate = async () => {
-    if (!sbUpdate?.downloadUrl) return;
+    if (!sbUpdate) return;
     setSbBusy(true);
     setSbError(null);
     try {
-      await api.applySingboxUpdate(sbUpdate.downloadUrl);
+      await api.applySingboxUpdate(sbUpdate.latest);
       // The Rust side placed a new binary at
       // <app_data_dir>/singbox-runtime/. ProcessManager now
       // prefers that path on next start. We re-fetch the

@@ -793,14 +793,15 @@ pub async fn check_singbox_update(app: AppHandle) -> AppResult<crate::updates::S
     crate::updates::check_singbox_update(&app).await
 }
 
-/// Frontend-facing wrapper: download + replace the runtime-cached
-/// sing-box. `download_url` must come from `check_singbox_update`'s
-/// `SingboxUpdateInfo.download_url` — we don't refetch the release
-/// list, so the user is always updating to the version they were
-/// shown.
+/// Refetch and install a checksum-verified sing-box release selected entirely by
+/// Rust. The optional version rejects a stale update card without accepting any
+/// browser-controlled URL or asset metadata.
 #[tauri::command]
-pub async fn apply_singbox_update(app: AppHandle, download_url: String) -> AppResult<String> {
-    crate::updates::apply_singbox_update(app, download_url).await
+pub async fn apply_singbox_update(
+    app: AppHandle,
+    expected_version: Option<String>,
+) -> AppResult<String> {
+    crate::updates::apply_singbox_update(app, expected_version).await
 }
 
 #[cfg(test)]

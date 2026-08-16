@@ -132,12 +132,11 @@ export const api = {
       current_version: string;
       latest_version: string;
       available: boolean;
-      download_url: string | null;
       asset_name: string | null;
       size_bytes: number;
     }>("check_singbox_update"),
-  applySingboxUpdate: (downloadUrl: string) =>
-    call<string>("apply_singbox_update", { downloadUrl }),
+  applySingboxUpdate: (expectedVersion?: string) =>
+    call<string>("apply_singbox_update", { expectedVersion }),
 };
 
 export { TauriCommandError };

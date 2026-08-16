@@ -69,6 +69,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+# Integrity verification and safe archive extraction for sing-box runtime updates.
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # Unique IDs
 uuid = { version = "1", features = ["v4", "serde"] }
 
