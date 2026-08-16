@@ -53,10 +53,23 @@ try {
     Push-Location $ProjectRoot
     try {
         $env:CARGO_TARGET_DIR = $BuildTarget
-        npm run tauri:build 2>&1 | Select-Object -Last 20
-        $buildExit = $LASTEXITCODE
-        if ($buildExit -ne 0) {
-            throw "tauri build failed with exit code $buildExit"
+        # Tauri's Node CLI writes ordinary progress messages to stderr. Launch
+        # it as a child process, then gate on its actual exit code rather than
+        # PowerShell's stderr-to-error policy.
+        $stdoutPath = Join-Path $BuildTarget 'tauri-build.stdout.log'
+        $stderrPath = Join-Path $BuildTarget 'tauri-build.stderr.log'
+        $buildProcess = Start-Process `
+            -FilePath 'npm.cmd' `
+            -ArgumentList @('run', 'tauri:build') `
+            -WorkingDirectory $ProjectRoot `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+        Get-Content -LiteralPath $stdoutPath, $stderrPath | Select-Object -Last 20
+        if ($buildProcess.ExitCode -ne 0) {
+            throw "tauri build failed with exit code $($buildProcess.ExitCode)"
         }
     } finally {
         Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
@@ -76,10 +89,19 @@ try {
     $artifactPath = Join-Path $StagePath $ExpectedArtifactName
     Copy-Item -LiteralPath $sourcePath -Destination $artifactPath -ErrorAction Stop
 
-    & $SignerExe -k $KeyPath $artifactPath 2>&1 | Select-Object -Last 10
-    $signExit = $LASTEXITCODE
-    if ($signExit -ne 0) {
-        throw "Updater signer failed with exit code $signExit"
+    $signStdoutPath = Join-Path $BuildTarget 'tauri-signer.stdout.log'
+    $signStderrPath = Join-Path $BuildTarget 'tauri-signer.stderr.log'
+    $signProcess = Start-Process `
+        -FilePath $SignerExe `
+        -ArgumentList @('-k', $KeyPath, $artifactPath) `
+        -NoNewWindow `
+        -Wait `
+        -PassThru `
+        -RedirectStandardOutput $signStdoutPath `
+        -RedirectStandardError $signStderrPath
+    Get-Content -LiteralPath $signStdoutPath, $signStderrPath | Select-Object -Last 10
+    if ($signProcess.ExitCode -ne 0) {
+        throw "Updater signer failed with exit code $($signProcess.ExitCode)"
     }
 
     $signaturePath = "$artifactPath.sig"

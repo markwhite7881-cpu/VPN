@@ -113,5 +113,7 @@ opt-level = "s"
 strip = true
 
 # Keep this crate self-contained when it is checked out below a directory
-# that happens to contain another Cargo.toml.
+# that happens to contain another Cargo.toml. The local signer is deliberately
+# built as an independent release tool, not as part of the application package.
 [workspace]
+exclude = ["crates/tauri-signer"]

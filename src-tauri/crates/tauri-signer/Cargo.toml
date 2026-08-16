@@ -9,3 +9,7 @@ publish = false
 # Same crate the upstream tauri-cli uses internally. v0.9 reads
 # the modern "chained" format produced by `tauri signer generate`.
 minisign = "0.9"
+
+# This standalone release tool must not inherit a parent workspace when the
+# application checkout is nested below an unrelated Cargo.toml.
+[workspace]
