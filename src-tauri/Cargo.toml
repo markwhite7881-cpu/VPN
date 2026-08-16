@@ -45,17 +45,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
-# `relaunch()` from @tauri-apps/plugin-process. Required so the
-# Tauri updater can re-exec the binary after `downloadAndInstall`.
-tauri-plugin-process = "2"
-# Auto-update for the app shell. Reads the manifest hosted on
-# GitHub Releases (see tauri.conf.json > plugins.updater.endpoints)
-# and applies signed updates. The matching npm package is
-# @tauri-apps/plugin-updater (used by the frontend). The plugin
-# requires a public key (in tauri.conf.json) and a private key
-# (in the project root, see scripts/release.sh) generated via
-# `npx tauri signer generate`.
-tauri-plugin-updater = "2"
+minisign = "0.9"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

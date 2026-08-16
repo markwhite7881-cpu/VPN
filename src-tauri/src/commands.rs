@@ -768,6 +768,22 @@ pub async fn list_processes() -> AppResult<Vec<ProcessInfo>> {
     Ok(out)
 }
 
+// ── app-shell and sing-box updates ───────────────────────────────────────
+
+/// Fetch the signed app-shell update manifest. URLs and signatures deliberately
+/// remain backend-only; the returned metadata is safe to render in the WebView.
+#[tauri::command]
+pub async fn check_app_update(app: AppHandle) -> AppResult<crate::app_update::AppUpdateInfo> {
+    crate::app_update::check_app_update(app).await
+}
+
+/// Refetch, validate, download, and verify an app update in Rust. The optional
+/// version prevents a stale UI card from selecting a different release.
+#[tauri::command]
+pub async fn install_app_update(app: AppHandle, expected_version: Option<String>) -> AppResult<()> {
+    crate::app_update::install_app_update(app, expected_version).await
+}
+
 // ── sing-box auto-update (see `updates` module) ─────────────────────────
 
 /// Frontend-facing wrapper: returns the current + latest sing-box

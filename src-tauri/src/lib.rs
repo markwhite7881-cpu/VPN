@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tauri::Manager;
 use tauri_plugin_autostart::MacosLauncher;
 
+pub mod app_update;
 pub mod clash_api;
 pub mod commands;
 pub mod config;
@@ -39,8 +40,6 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             // Forward the `--minimized` flag (no-op on Windows/Linux)
@@ -108,6 +107,8 @@ pub fn run() {
             commands::apply_system_proxy,
             commands::clear_system_proxy,
             commands::list_processes,
+            commands::check_app_update,
+            commands::install_app_update,
             commands::check_singbox_update,
             commands::apply_singbox_update,
         ])

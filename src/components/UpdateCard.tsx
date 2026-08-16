@@ -1,40 +1,10 @@
-// UpdateCard — combined UI for the two auto-update flows.
+// UpdateCard — combined UI for backend-verified app-shell and sing-box updates.
 //
-//   1. App shell (Tauri updater). Source: GitHub Releases, signed
-//      with the project's `tauri-updater.key`. The frontend uses
-//      `@tauri-apps/plugin-updater` directly — no Rust command in
-//      between. The manifest lives at
-//      `https://github.com/markwhite7881-cpu/cloakwire/releases/latest/
-//      download/latest.json` (see tauri.conf.json).
-//
-//   2. sing-box core (custom Rust commands, see src-tauri/src/
-//      updates.rs). The frontend calls `api.checkSingboxUpdate` /
-//      `api.applySingboxUpdate` and renders the result.
-//
-// Why two separate cards in one component? Both update flows are
-// conceptually similar (check → show diff → install) and a
-// non-tech-savvy user benefits from seeing them together at the
-// bottom of the Home tab — "what's the latest, what do I have".
-//
-// Behaviour:
-//   - On mount, both checks fire automatically (silent in the
-//     background). The "Check for updates" buttons let the user
-//     force a refresh.
-//   - The Tauri updater shows a one-click "Restart and update"
-//     button when an update is available. `downloadAndInstall`
-//     blocks until the download is finished; the manual restart
-//     happens via `app.restart()`.
-//   - The sing-box updater shows the current → latest version
-//     and a "Download" button. The actual install runs in Rust
-//     (stops the running process, downloads the .zip, extracts
-//     the binary, places it at <app_data_dir>/singbox-runtime/).
-//
-// Both flows are no-ops when running outside the Tauri shell
-// (browser preview), so the card stays quiet in dev.
+// The app-shell manifest, artifact URL, and minisign signature remain in Rust.
+// The WebView receives only version, current version, availability, and notes.
+// The sing-box core remains a separate custom Rust update flow.
 
 import { useEffect, useState } from "react";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { Download, RefreshCw, ShieldCheck, Cpu } from "lucide-react";
 import { Button } from "./Button";
 import { api, TauriCommandError } from "@/lib/api";
@@ -53,7 +23,12 @@ interface Props {
 
 export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
   // App shell (Tauri updater) state.
-  const [appUpdate, setAppUpdate] = useState<Update | null>(null);
+  const [appUpdate, setAppUpdate] = useState<{
+    version: string;
+    current_version: string;
+    available: boolean;
+    notes: string;
+  } | null>(null);
   const [appBusy, setAppBusy] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
 
@@ -78,8 +53,8 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
   const checkAppUpdate = async () => {
     setAppError(null);
     try {
-      const u = await check();
-      setAppUpdate(u ?? null);
+      const update = await api.checkAppUpdate();
+      setAppUpdate(update.available ? update : null);
     } catch (e) {
       // `check()` throws when no update is available OR on a
       // network error. Both look the same to the caller, so we
@@ -100,16 +75,7 @@ export function UpdateCard({ currentSingboxVersion, onSingboxUpdated }: Props) {
     setAppBusy(true);
     setAppError(null);
     try {
-      // `downloadAndInstall` is from the updater plugin; the
-      // type isn't on `Update` itself but the runtime method
-      // exists. Cast to keep the call site readable.
-      await (appUpdate as unknown as { downloadAndInstall: () => Promise<void> })
-        .downloadAndInstall();
-      // The Tauri updater requires a manual relaunch — it
-      // can't replace the running .exe while it's mapped in.
-      // `relaunch()` (from plugin-process) re-execs the current
-      // binary; on Windows that's typically a one-second flicker.
-      await relaunch();
+      await api.installAppUpdate(appUpdate.version);
     } catch (e) {
       const msg =
         e instanceof TauriCommandError
@@ -214,7 +180,12 @@ function AppUpdateRow({
   onCheck,
   onInstall,
 }: {
-  update: Update | null;
+  update: {
+    version: string;
+    current_version: string;
+    available: boolean;
+    notes: string;
+  } | null;
   busy: boolean;
   error: string | null;
   onCheck: () => void;
@@ -232,8 +203,8 @@ function AppUpdateRow({
                 New version{" "}
                 <span className="font-mono text-primary">{update!.version}</span>{" "}
                 available
-                {update!.body ? (
-                  <span className="text-xs text-muted-foreground"> — restart to apply</span>
+                {update!.notes ? (
+                  <span className="text-xs text-muted-foreground"> — {update!.notes}</span>
                 ) : null}
               </>
             ) : error ? (
