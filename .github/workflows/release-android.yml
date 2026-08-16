@@ -64,13 +64,15 @@ jobs:
           java-version: 17
 
       - name: Install Android NDK
-        # ubuntu-latest runners ship the Android SDK at $ANDROID_HOME
-        # but not our exact NDK. AGP 8.11 supports NDK 28; gomobile
-        # needs ANDROID_NDK_HOME to find the clang toolchains.
+        # ubuntu-latest runners ship the Android SDK at $ANDROID_HOME.
+        # `sdkmanager` is not guaranteed to be on PATH, so resolve its
+        # command-line-tools location explicitly before installing our NDK.
         run: |
           set -e
-          yes | sdkmanager --licenses > /dev/null
-          sdkmanager "ndk;${NDK_VERSION}"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" "ndk;${NDK_VERSION}"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
           ls "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" | head -5
 
