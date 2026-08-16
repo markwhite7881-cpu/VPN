@@ -18,14 +18,12 @@
 // Engine trait is required at module scope for the `tests` submodule
 // which uses `STANDARD.encode(...)` and shares scope via `use super::*`.
 #[allow(unused_imports)]
-use base64::Engine as _;
-#[allow(unused_imports)]
 use base64::engine::general_purpose::STANDARD;
+#[allow(unused_imports)]
+use base64::Engine as _;
 use serde::Deserialize;
 
-use super::{
-    b64_try, Outbound, ParseError, TlsCfg, Transport, VmessCipher, VmessOut,
-};
+use super::{b64_try, Outbound, ParseError, TlsCfg, Transport, VmessCipher, VmessOut};
 
 #[derive(Debug, Deserialize)]
 struct RawVmess {
@@ -77,13 +75,13 @@ fn json_to_port(v: &serde_json::Value) -> Result<u16, ParseError> {
 }
 
 pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
-    let after = raw
-        .strip_prefix("vmess://")
-        .ok_or_else(|| ParseError::InvalidValue("scheme".to_string(), "expected vmess://".into()))?;
+    let after = raw.strip_prefix("vmess://").ok_or_else(|| {
+        ParseError::InvalidValue("scheme".to_string(), "expected vmess://".into())
+    })?;
     // Some clients embed the whole URI in base64, others embed a JSON.
     // Try the JSON variant first (it has '{' or 'v' as the first char).
-    let bytes = b64_try(after)
-        .ok_or_else(|| ParseError::Base64(after.chars().take(40).collect()))?;
+    let bytes =
+        b64_try(after).ok_or_else(|| ParseError::Base64(after.chars().take(40).collect()))?;
     let decoded = String::from_utf8(bytes).map_err(|_| ParseError::Utf8)?;
     let decoded = decoded.trim();
 
@@ -97,7 +95,10 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
     let alter_id = raw
         .aid
         .as_ref()
-        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
         .and_then(|n| u16::try_from(n).ok())
         .unwrap_or(0);
 
@@ -170,9 +171,7 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
 fn parse_cipher(s: Option<&str>) -> VmessCipher {
     match s.map(str::to_ascii_lowercase).as_deref() {
         Some("aes-128-gcm") | Some("aes128gcm") => VmessCipher::Aes128Gcm,
-        Some("chacha20-poly1305") | Some("chacha20-ietf-poly1305") => {
-            VmessCipher::Chacha20Poly1305
-        }
+        Some("chacha20-poly1305") | Some("chacha20-ietf-poly1305") => VmessCipher::Chacha20Poly1305,
         Some("none") => VmessCipher::None,
         _ => VmessCipher::Auto,
     }

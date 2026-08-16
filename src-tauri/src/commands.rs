@@ -94,9 +94,7 @@ pub async fn check_config(app: AppHandle, config_path: String) -> AppResult<Stri
     // Same CREATE_NO_WINDOW dance — `sing-box check -c <path>` is a
     // short-lived console-mode spawn and otherwise flashes a CMD window.
     let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg("check")
-        .arg("-c")
-        .arg(&config_path);
+    cmd.arg("check").arg("-c").arg(&config_path);
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -257,14 +255,14 @@ pub async fn parse_links(text: String) -> AppResult<ParseLinksResult> {
     for line in raw_lines {
         match parser::parse_link(&line) {
             Ok(ob) => outbounds.push(ob),
-            Err(e) => failures.push(ParseFailure {
-                line,
-                error: e,
-            }),
+            Err(e) => failures.push(ParseFailure { line, error: e }),
         }
     }
     let _ = was_base64; // currently informational only
-    Ok(ParseLinksResult { outbounds, failures })
+    Ok(ParseLinksResult {
+        outbounds,
+        failures,
+    })
 }
 
 /// Parse a user-typed blob that may contain a mix of share-links and
@@ -410,7 +408,9 @@ pub async fn test_delay(
 ) -> AppResult<Option<u32>> {
     let base = api_url(&pm).await?;
     let client = crate::clash_api::Client::new();
-    client.test_delay(&base, &name, timeout_ms.unwrap_or(3000)).await
+    client
+        .test_delay(&base, &name, timeout_ms.unwrap_or(3000))
+        .await
 }
 
 /// Direct TCP-connect ping, independent of sing-box.
@@ -509,10 +509,7 @@ pub async fn lookup_geoip(ips: Vec<String>) -> AppResult<Vec<(String, String)>> 
 // for manual control / debugging.
 
 #[tauri::command]
-pub async fn start_traffic(
-    app: AppHandle,
-    pm: State<'_, Arc<ProcessManager>>,
-) -> AppResult<()> {
+pub async fn start_traffic(app: AppHandle, pm: State<'_, Arc<ProcessManager>>) -> AppResult<()> {
     let base = api_url(&pm).await?;
     pm.traffic().start(app, &base).await
 }
@@ -603,7 +600,10 @@ pub async fn fetch_subscription(url: String) -> AppResult<ParseLinksResult> {
             Err(e) => failures.push(ParseFailure { line, error: e }),
         }
     }
-    Ok(ParseLinksResult { outbounds, failures })
+    Ok(ParseLinksResult {
+        outbounds,
+        failures,
+    })
 }
 
 /// Decode a subscription blob: per-line links OR a base64-encoded
@@ -625,8 +625,8 @@ fn split_subscription_text(text: &str) -> (Vec<String>, bool) {
     }
     let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     let try_decode = |input: &str| {
-        use base64::Engine as _;
         use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+        use base64::Engine as _;
         let pad = |mut t: String| {
             while t.len() % 4 != 0 {
                 t.push('=');
@@ -672,8 +672,8 @@ fn split_subscription(text: &str) -> (Vec<String>, bool) {
     // Base64 fallback.
     let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
     let try_decode = |input: &str| {
-        use base64::Engine as _;
         use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+        use base64::Engine as _;
         let pad = |mut t: String| {
             while t.len() % 4 != 0 {
                 t.push('=');

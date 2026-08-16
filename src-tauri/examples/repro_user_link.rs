@@ -12,7 +12,10 @@ fn main() {
     match parse_link(raw) {
         Ok(o) => {
             println!("OK: protocol={} tag={}", o.protocol(), o.display_name());
-            println!("server:port = {:?}", o.server().zip(Some(o.port().unwrap_or(0))));
+            println!(
+                "server:port = {:?}",
+                o.server().zip(Some(o.port().unwrap_or(0)))
+            );
             println!("full = {}", serde_json::to_string_pretty(&o).unwrap());
         }
         Err(e) => {

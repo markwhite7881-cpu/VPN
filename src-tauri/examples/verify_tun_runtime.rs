@@ -72,7 +72,11 @@ fn main() {
         fs::create_dir_all(parent).expect("create examples dir");
     }
     fs::write(&out_path, config_json).expect("write output");
-    println!("  wrote {} ({} bytes)", out_path.display(), config_json.len());
+    println!(
+        "  wrote {} ({} bytes)",
+        out_path.display(),
+        config_json.len()
+    );
 
     // ---- 2. Try to start sing-box ------------------------------------
     println!("\n=== Spawning sing-box in TUN mode (3s timeout) ===\n");

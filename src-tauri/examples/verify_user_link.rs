@@ -20,11 +20,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use singbox_client_lib::config::{
-    Config, GeneratorSettings, RoutingOptions, TunnelMode,
-};
+use base64::Engine as _;
+use singbox_client_lib::config::{Config, GeneratorSettings, RoutingOptions, TunnelMode};
 use singbox_client_lib::parser::parse_link;
 
 const USER_LINK: &str = "vless://be0589e6-eac2-48cd-94f4-e41ceb8aa3c8@138.124.33.206:443\
@@ -175,10 +173,7 @@ fn main() {
             if o.status.success() {
                 println!("\n✅ sing-box check passed");
             } else {
-                println!(
-                    "\n❌ sing-box check failed (exit {:?})",
-                    o.status.code()
-                );
+                println!("\n❌ sing-box check failed (exit {:?})", o.status.code());
             }
         }
         Err(e) => eprintln!("!! could not run sing-box: {e}"),
@@ -191,7 +186,9 @@ fn main() {
 /// so we use reqwest's blocking client. Returns the parsed outbounds
 /// (with per-line failure tolerance) or an error string describing
 /// the transport-level failure.
-fn fetch_subscription_blocking(url: &str) -> Result<Vec<singbox_client_lib::parser::Outbound>, String> {
+fn fetch_subscription_blocking(
+    url: &str,
+) -> Result<Vec<singbox_client_lib::parser::Outbound>, String> {
     let body = reqwest::blocking::Client::builder()
         .user_agent("singbox-client/0.1")
         .timeout(std::time::Duration::from_secs(15))

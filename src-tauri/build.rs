@@ -23,8 +23,7 @@ fn main() {
                 manifest_path.display()
             );
         }
-        let manifest = std::fs::read_to_string(manifest_path)
-            .expect("read app.manifest");
+        let manifest = std::fs::read_to_string(manifest_path).expect("read app.manifest");
         // `windows().app_manifest(...)` REPLACES the default
         // Tauri-provided manifest entirely, so we must include the
         // Common-Controls dependency ourselves. See:
@@ -37,9 +36,8 @@ fn main() {
         } else {
             inject_common_controls(manifest)
         };
-        attrs = attrs.windows_attributes(
-            tauri_build::WindowsAttributes::new().app_manifest(combined),
-        );
+        attrs =
+            attrs.windows_attributes(tauri_build::WindowsAttributes::new().app_manifest(combined));
         println!("cargo:rerun-if-changed=app.manifest");
     }
     tauri_build::try_build(attrs).expect("tauri build");

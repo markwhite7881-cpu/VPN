@@ -61,8 +61,10 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
         .get("alpn")
         .map(|s| s.split(',').map(str::trim).map(String::from).collect())
         .unwrap_or_default();
-    let allow_insecure =
-        matches!(params.get("allow_insecure").map(String::as_str), Some("1" | "true"));
+    let allow_insecure = matches!(
+        params.get("allow_insecure").map(String::as_str),
+        Some("1" | "true")
+    );
     let fingerprint = params.get("fp").cloned();
 
     let tag = url

@@ -71,7 +71,11 @@ fn main() {
         );
         return;
     }
-    println!("\nrunning: {} check -c {}", singbox.display(), out.display());
+    println!(
+        "\nrunning: {} check -c {}",
+        singbox.display(),
+        out.display()
+    );
     let output = Command::new(&singbox)
         .arg("check")
         .arg("-c")
@@ -87,9 +91,7 @@ fn main() {
             if o.status.success() {
                 println!("\n✅ sing-box check passed");
             } else {
-                eprintln!(
-                    "\n❌ sing-box check failed — credentials still need real values"
-                );
+                eprintln!("\n❌ sing-box check failed — credentials still need real values");
                 std::process::exit(2);
             }
         }

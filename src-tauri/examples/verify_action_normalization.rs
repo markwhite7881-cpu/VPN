@@ -156,7 +156,11 @@ fn main() {
             i
         );
         // UI-only fields must NOT leak through
-        assert!(r.get("id").is_none(), "user rule {}: id must be stripped", i);
+        assert!(
+            r.get("id").is_none(),
+            "user rule {}: id must be stripped",
+            i
+        );
         assert!(
             r.get("label").is_none(),
             "user rule {}: label must be stripped",

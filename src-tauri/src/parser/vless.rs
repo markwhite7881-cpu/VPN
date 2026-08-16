@@ -10,9 +10,7 @@
 
 use url::Url;
 
-use super::{
-    pct_decode, EchCfg, Outbound, ParseError, RealityCfg, TlsCfg, Transport, VlessOut,
-};
+use super::{pct_decode, EchCfg, Outbound, ParseError, RealityCfg, TlsCfg, Transport, VlessOut};
 
 pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
     // url::Url doesn't accept `vless://` (it's not a registered scheme
@@ -41,14 +39,8 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    let type_p = params
-        .get("type")
-        .map(String::as_str)
-        .unwrap_or("tcp");
-    let security = params
-        .get("security")
-        .map(String::as_str)
-        .unwrap_or("none");
+    let type_p = params.get("type").map(String::as_str).unwrap_or("tcp");
+    let security = params.get("security").map(String::as_str).unwrap_or("none");
     let flow = params.get("flow").cloned();
     let tag = url
         .fragment()
@@ -134,7 +126,10 @@ fn parse_tls(
         .map(|s| s.split(',').map(str::trim).map(String::from).collect())
         .unwrap_or_default();
     let fp = p.get("fp").cloned();
-    let allow_insecure = matches!(p.get("allowInsecure").map(String::as_str), Some("1" | "true"));
+    let allow_insecure = matches!(
+        p.get("allowInsecure").map(String::as_str),
+        Some("1" | "true")
+    );
 
     let reality = if security == "reality" {
         let pbk = p
@@ -154,7 +149,9 @@ fn parse_tls(
         None
     };
 
-    let ech = p.get("ech").map(|cfg| EchCfg { config: cfg.clone() });
+    let ech = p.get("ech").map(|cfg| EchCfg {
+        config: cfg.clone(),
+    });
 
     Ok(TlsCfg {
         enabled: true,
@@ -204,7 +201,10 @@ mod tests {
                 match &v.transport {
                     Transport::Ws { path, headers } => {
                         assert_eq!(path.as_deref(), Some("/ws"));
-                        assert_eq!(headers, &vec![("Host".to_string(), "ws.example.org".to_string())]);
+                        assert_eq!(
+                            headers,
+                            &vec![("Host".to_string(), "ws.example.org".to_string())]
+                        );
                     }
                     _ => panic!("expected WS transport"),
                 }

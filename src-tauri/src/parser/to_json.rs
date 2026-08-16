@@ -14,9 +14,7 @@
 
 use serde_json::{json, Map, Value};
 
-use super::{
-    Outbound, Transport, TuicCc, TuicUdp, VmessCipher,
-};
+use super::{Outbound, Transport, TuicCc, TuicUdp, VmessCipher};
 
 impl Outbound {
     /// Render this outbound as a sing-box JSON object.
@@ -148,10 +146,7 @@ fn tls_json(
     }
     // sing-box 1.13 demands explicit `enabled: true` on utls.
     if let Some(f) = fp {
-        o.insert(
-            "utls".into(),
-            json!({ "enabled": true, "fingerprint": f }),
-        );
+        o.insert("utls".into(), json!({ "enabled": true, "fingerprint": f }));
     } else if reality.is_some() {
         // Reality clients must have a uTLS fingerprint; default to chrome.
         o.insert(

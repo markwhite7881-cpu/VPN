@@ -77,7 +77,11 @@ fn main() {
         );
         return;
     }
-    println!("\nrunning: {} check -c {}", singbox.display(), out.display());
+    println!(
+        "\nrunning: {} check -c {}",
+        singbox.display(),
+        out.display()
+    );
     let output = Command::new(&singbox)
         .arg("check")
         .arg("-c")

@@ -112,7 +112,7 @@ npm install
 # Build the .deb (npm run tauri:build → tauri-bundler → .deb,
 # then scripts/build-linux-deb.sh round-trips through dpkg-deb
 # to inject scripts/deb-postinst.sh as DEBIAN/postinst).
-./scripts/build-linux-deb.sh 1.0.3
+./scripts/build-linux-deb.sh 1.3.0
 
 # Artifacts:
 #   src-tauri/target/release/bundle/deb/Cloakwire_<ver>_amd64.deb

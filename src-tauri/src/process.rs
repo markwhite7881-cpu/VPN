@@ -239,7 +239,10 @@ impl ProcessManager {
     ) -> AppResult<StatusReport> {
         {
             let mut status = self.status.lock().await;
-            if matches!(status.status, Status::Starting | Status::Running | Status::Stopping) {
+            if matches!(
+                status.status,
+                Status::Starting | Status::Running | Status::Stopping
+            ) {
                 return Err(AppError::AlreadyRunning(status.pid.unwrap_or(0)));
             }
             status.status = Status::Starting;
@@ -285,9 +288,9 @@ impl ProcessManager {
             return Err(AppError::TunCapabilities(msg));
         }
 
-        let mut child = cmd.spawn().map_err(|e| {
-            AppError::Spawn(format!("{}: {e}", binary.display()))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| AppError::Spawn(format!("{}: {e}", binary.display())))?;
         let pid = child.id();
 
         // After sing-box brings the TUN interface up, explicitly assign
@@ -398,7 +401,8 @@ impl ProcessManager {
                     match ch.try_wait() {
                         Ok(Some(status)) => {
                             *g = None;
-                            self.finalize_exit(Some(status.code().unwrap_or(-1)), None).await;
+                            self.finalize_exit(Some(status.code().unwrap_or(-1)), None)
+                                .await;
                             return Ok(self.status.lock().await.clone());
                         }
                         Ok(None) => {
@@ -416,7 +420,8 @@ impl ProcessManager {
                         }
                         Err(e) => {
                             *g = None;
-                            self.finalize_exit(None, Some(format!("try_wait failed: {e}"))).await;
+                            self.finalize_exit(None, Some(format!("try_wait failed: {e}")))
+                                .await;
                             return Ok(self.status.lock().await.clone());
                         }
                     }
@@ -465,7 +470,8 @@ impl ProcessManager {
         *self.current_config.lock().await = None;
         *self.controller_url.lock().await = None;
         self.traffic.stop().await;
-        self.push_log(LogStream::System, "process manager state reset").await;
+        self.push_log(LogStream::System, "process manager state reset")
+            .await;
     }
 
     /// Force-clear the manager state. Used by the `reset_state` command
@@ -540,7 +546,8 @@ impl ProcessManager {
                         Err(e) => {
                             *guard = None;
                             drop(guard);
-                            self.finalize_exit(None, Some(format!("try_wait failed: {e}"))).await;
+                            self.finalize_exit(None, Some(format!("try_wait failed: {e}")))
+                                .await;
                         }
                     }
                 }
@@ -554,8 +561,6 @@ fn current_target_triple() -> &'static str {
     // The CARGO_CFG_TARGET_TRIPLE env var is set during build.
     option_env!("CARGO_CFG_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc")
 }
-
-
 
 // --- System proxy management ---------------------------------------
 // Windows uses WinINET registry keys, Linux uses desktop-environment
@@ -635,13 +640,23 @@ pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
             .args(["set", "org.gnome.system.proxy.http", "host", host])
             .status();
         let _ = std::process::Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy.http", "port", &port.to_string()])
+            .args([
+                "set",
+                "org.gnome.system.proxy.http",
+                "port",
+                &port.to_string(),
+            ])
             .status();
         let _ = std::process::Command::new("gsettings")
             .args(["set", "org.gnome.system.proxy.https", "host", host])
             .status();
         let _ = std::process::Command::new("gsettings")
-            .args(["set", "org.gnome.system.proxy.https", "port", &port.to_string()])
+            .args([
+                "set",
+                "org.gnome.system.proxy.https",
+                "port",
+                &port.to_string(),
+            ])
             .status();
         log::info!("set GNOME system proxy to {proxy_url}");
         return Ok(());
@@ -654,16 +669,40 @@ pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
     // --dest=org.kde.kioslaves / kioslave5 reparseConfiguration`
     // themselves. We still set it so newly-spawned apps pick it up.
     let kwrite_ok = std::process::Command::new("kwriteconfig5")
-        .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "1"])
+        .args([
+            "--file",
+            "kioslaverc",
+            "--group",
+            "Proxy Settings",
+            "--key",
+            "ProxyType",
+            "1",
+        ])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
     if kwrite_ok {
         let _ = std::process::Command::new("kwriteconfig5")
-            .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpProxy", &proxy_url])
+            .args([
+                "--file",
+                "kioslaverc",
+                "--group",
+                "Proxy Settings",
+                "--key",
+                "httpProxy",
+                &proxy_url,
+            ])
             .status();
         let _ = std::process::Command::new("kwriteconfig5")
-            .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "httpsProxy", &proxy_url])
+            .args([
+                "--file",
+                "kioslaverc",
+                "--group",
+                "Proxy Settings",
+                "--key",
+                "httpsProxy",
+                &proxy_url,
+            ])
             .status();
         log::info!("set KDE system proxy to {proxy_url} (re-login may be required)");
         return Ok(());
@@ -696,7 +735,15 @@ pub fn clear_system_proxy() -> AppResult<()> {
         return Ok(());
     }
     let kwrite_ok = std::process::Command::new("kwriteconfig5")
-        .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", "ProxyType", "0"])
+        .args([
+            "--file",
+            "kioslaverc",
+            "--group",
+            "Proxy Settings",
+            "--key",
+            "ProxyType",
+            "0",
+        ])
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
@@ -753,7 +800,10 @@ fn enabled_network_services() -> Vec<String> {
 
 #[cfg(target_os = "macos")]
 fn run_networksetup(args: &[&str]) {
-    match std::process::Command::new("networksetup").args(args).output() {
+    match std::process::Command::new("networksetup")
+        .args(args)
+        .output()
+    {
         Ok(output) if !output.status.success() => {
             log::warn!(
                 "macos-proxy: networksetup {} exited {:?}: {}",
@@ -785,12 +835,7 @@ pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
     for service in &services {
         log::info!("macos-proxy: applying to {service}");
         run_networksetup(&["-setwebproxy", service.as_str(), host, port.as_str()]);
-        run_networksetup(&[
-            "-setsecurewebproxy",
-            service.as_str(),
-            host,
-            port.as_str(),
-        ]);
+        run_networksetup(&["-setsecurewebproxy", service.as_str(), host, port.as_str()]);
         run_networksetup(&["-setwebproxystate", service.as_str(), "on"]);
         run_networksetup(&["-setsecurewebproxystate", service.as_str(), "on"]);
     }
@@ -806,7 +851,6 @@ pub fn clear_system_proxy() -> AppResult<()> {
     }
     Ok(())
 }
-
 
 // --- TUN adapter DNS (Windows only) --------------------------------
 //
@@ -841,8 +885,8 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
         let content = tokio::fs::read_to_string(config_path)
             .await
             .map_err(|e| format!("read config {config_path:?}: {e}"))?;
-        let json: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("parse config JSON: {e}"))?;
+        let json: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| format!("parse config JSON: {e}"))?;
 
         // Pull the local-DNS server out of `dns.servers[0]`. Falls back
         // to 1.1.1.1 if for any reason the field is missing (e.g. a
@@ -863,7 +907,10 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
         let interface = json
             .get("inbounds")
             .and_then(|i| i.as_array())
-            .and_then(|arr| arr.iter().find(|i| i.get("type").and_then(|t| t.as_str()) == Some("tun")))
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|i| i.get("type").and_then(|t| t.as_str()) == Some("tun"))
+            })
             .and_then(|i| i.get("interface_name"))
             .and_then(|n| n.as_str())
             .unwrap_or("singbox-tun")
@@ -874,7 +921,10 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
         // admin (TUN needs it), so this should just work.
         let output = std::process::Command::new("netsh")
             .args([
-                "interface", "ip", "set", "dns",
+                "interface",
+                "ip",
+                "set",
+                "dns",
                 &interface,
                 "static",
                 &dns,
@@ -924,8 +974,8 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
     let content = tokio::fs::read_to_string(config_path)
         .await
         .map_err(|e| format!("read config {}: {e}", config_path.display()))?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("parse config JSON: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("parse config JSON: {e}"))?;
     let has_tun = json
         .get("inbounds")
         .and_then(|i| i.as_array())
@@ -942,10 +992,7 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
     //    standard on Ubuntu desktop). If it's not installed, fail
     //    soft — sing-box itself will produce a clearer EPERM error
     //    when it tries to open /dev/net/tun.
-    let output = match std::process::Command::new("getcap")
-        .arg(binary)
-        .output()
-    {
+    let output = match std::process::Command::new("getcap").arg(binary).output() {
         Ok(output) => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             log::warn!("`getcap` is unavailable; skipping TUN capability preflight");
@@ -1025,9 +1072,7 @@ fn has_required_tun_capabilities(getcap_output: &str) -> bool {
         || flags.is_empty()
         || !flags.contains('e')
         || !flags.chars().all(|flag| matches!(flag, 'e' | 'i' | 'p'))
-        || !flags
-            .chars()
-            .all(|flag| flags.matches(flag).count() == 1)
+        || !flags.chars().all(|flag| flags.matches(flag).count() == 1)
     {
         return false;
     }
@@ -1107,7 +1152,11 @@ mod reset_tests {
         manager
             .reset_with_proxy_cleanup(|| {
                 assert_eq!(
-                    manager.status.try_lock().expect("status lock is available").status,
+                    manager
+                        .status
+                        .try_lock()
+                        .expect("status lock is available")
+                        .status,
                     Status::Running
                 );
                 Ok(())
@@ -1164,7 +1213,6 @@ mod tun_capability_tests {
         ));
     }
 }
-
 
 #[cfg(not(target_os = "linux"))]
 async fn check_tun_capabilities(_binary: &Path, _config_path: &Path) -> Result<(), String> {

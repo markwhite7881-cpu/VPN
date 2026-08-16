@@ -23,8 +23,8 @@ mod vmess;
 
 use std::str::FromStr;
 
-use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 pub use error::ParseError;

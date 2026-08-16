@@ -109,10 +109,7 @@ fn main() {
         "Discord.exe must be preserved in process_name array, got {:?}",
         name_strs
     );
-    assert_eq!(
-        first.get("action").and_then(|a| a.as_str()),
-        Some("route")
-    );
+    assert_eq!(first.get("action").and_then(|a| a.as_str()), Some("route"));
     assert_eq!(
         first.get("outbound").and_then(|a| a.as_str()),
         Some("direct")

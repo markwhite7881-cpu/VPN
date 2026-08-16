@@ -34,14 +34,8 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    let type_p = params
-        .get("type")
-        .map(String::as_str)
-        .unwrap_or("tcp");
-    let security = params
-        .get("security")
-        .map(String::as_str)
-        .unwrap_or("tls");
+    let type_p = params.get("type").map(String::as_str).unwrap_or("tcp");
+    let security = params.get("security").map(String::as_str).unwrap_or("tls");
 
     let transport = match type_p {
         "tcp" | "" => Transport::Tcp,
@@ -73,8 +67,10 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
         .map(|s| s.split(',').map(str::trim).map(String::from).collect())
         .unwrap_or_default();
     let fp = params.get("fp").cloned();
-    let allow_insecure =
-        matches!(params.get("allowInsecure").map(String::as_str), Some("1" | "true"));
+    let allow_insecure = matches!(
+        params.get("allowInsecure").map(String::as_str),
+        Some("1" | "true")
+    );
 
     let reality = if security == "reality" {
         let pbk = params

@@ -15,12 +15,10 @@
 //! Some clients also percent-encode the `userinfo` (`%3A` for `:`),
 //! which we tolerate.
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 
-use super::{
-    b64_try, Outbound, ParseError, SsOut,
-};
+use super::{b64_try, Outbound, ParseError, SsOut};
 
 pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
     let after = raw
@@ -136,13 +134,15 @@ fn decode_userinfo(s: &str) -> Result<(String, String), ParseError> {
     // first; if the result still has a ':' we take it; else we treat the
     // original as `method:password` and split on the FIRST ':'.
     let dec = percent_decode_userinfo(s);
-    let candidate = if dec.contains(':') { dec } else { s.to_string() };
-    let (method, password) = candidate
-        .split_once(':')
-        .ok_or(ParseError::InvalidValue(
-            "userinfo".to_string(),
-            "expected method:password".into(),
-        ))?;
+    let candidate = if dec.contains(':') {
+        dec
+    } else {
+        s.to_string()
+    };
+    let (method, password) = candidate.split_once(':').ok_or(ParseError::InvalidValue(
+        "userinfo".to_string(),
+        "expected method:password".into(),
+    ))?;
     if method.is_empty() {
         return Err(ParseError::Missing("method".to_string()));
     }
@@ -163,7 +163,8 @@ fn split_host_port(s: &str) -> Result<(String, u16), ParseError> {
             .ok_or_else(|| ParseError::Port("missing port after ']'".into()))?;
         return Ok((
             host.to_string(),
-            port.parse().map_err(|_| ParseError::Port(port.to_string()))?,
+            port.parse()
+                .map_err(|_| ParseError::Port(port.to_string()))?,
         ));
     }
     // Could still be a bare IPv6 without brackets — heuristic: more than

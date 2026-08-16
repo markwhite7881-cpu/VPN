@@ -49,10 +49,7 @@ impl Client {
         let resp = self.http.get(&url).send().await.map_err(http_err)?;
         let status = resp.status();
         if !status.is_success() {
-            return Err(AppError::Clash(format!(
-                "GET /proxies returned {}",
-                status
-            )));
+            return Err(AppError::Clash(format!("GET /proxies returned {}", status)));
         }
         let body: ProxiesResponse = resp.json().await.map_err(http_err)?;
         Ok(body)
@@ -68,12 +65,7 @@ impl Client {
     /// ignores the status — which is exactly the bug that made
     /// our `proxy` selector stay pinned to `auto` while urltest
     /// kept switching traffic to whichever server was fastest.
-    pub async fn select_proxy(
-        &self,
-        base_url: &str,
-        group: &str,
-        member: &str,
-    ) -> AppResult<()> {
+    pub async fn select_proxy(&self, base_url: &str, group: &str, member: &str) -> AppResult<()> {
         let url = format!(
             "{}/proxies/{}",
             base_url.trim_end_matches('/'),
@@ -118,9 +110,7 @@ impl Client {
             return Ok(None);
         }
         if !status.is_success() {
-            return Err(AppError::Clash(format!(
-                "delay({name}) returned {status}"
-            )));
+            return Err(AppError::Clash(format!("delay({name}) returned {status}")));
         }
         // sing-box returns {"delay": 123} or {"message": "..."} on failure.
         let value: Value = resp.json().await.map_err(http_err)?;

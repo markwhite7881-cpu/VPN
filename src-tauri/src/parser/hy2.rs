@@ -53,8 +53,10 @@ pub fn parse(raw: &str) -> Result<Outbound, ParseError> {
         .get("alpn")
         .map(|s| s.split(',').map(str::trim).map(String::from).collect())
         .unwrap_or_default();
-    let allow_insecure =
-        matches!(params.get("insecure").map(String::as_str), Some("1" | "true"));
+    let allow_insecure = matches!(
+        params.get("insecure").map(String::as_str),
+        Some("1" | "true")
+    );
 
     let obfs = match params.get("obfs").map(String::as_str) {
         Some("salamander") => Some(Hy2Obfs {

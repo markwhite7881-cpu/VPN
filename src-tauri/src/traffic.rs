@@ -57,7 +57,11 @@ impl TrafficStream {
 
     /// Start streaming traffic. If a previous stream is still running,
     /// it is cancelled first.
-    pub async fn start(self: &std::sync::Arc<Self>, app: AppHandle, base_url: &str) -> AppResult<()> {
+    pub async fn start(
+        self: &std::sync::Arc<Self>,
+        app: AppHandle,
+        base_url: &str,
+    ) -> AppResult<()> {
         // Cancel any existing stream.
         self.stop().await;
 
@@ -170,14 +174,8 @@ fn parse_traffic_frame(
     // It can also occasionally send a heartbeat text frame, which we
     // treat as `up=0, down=0` so the chart keeps a flat line.
     let v: serde_json::Value = serde_json::from_str(text).map_err(AppError::Serde)?;
-    let up = v
-        .get("up")
-        .and_then(|n| n.as_u64())
-        .unwrap_or(0);
-    let down = v
-        .get("down")
-        .and_then(|n| n.as_u64())
-        .unwrap_or(0);
+    let up = v.get("up").and_then(|n| n.as_u64()).unwrap_or(0);
+    let down = v.get("down").and_then(|n| n.as_u64()).unwrap_or(0);
     let now = Instant::now();
     let up_bps = if let Some(prev_t) = last_at {
         let dt = now.duration_since(*prev_t).as_secs_f64().max(0.001);
@@ -228,8 +226,8 @@ mod tests {
         let mut up = 0;
         let mut down = 0;
         let mut at: Option<Instant> = None;
-        let s = parse_traffic_frame(r#"{"up":1024,"down":2048}"#, &mut up, &mut down, &mut at)
-            .unwrap();
+        let s =
+            parse_traffic_frame(r#"{"up":1024,"down":2048}"#, &mut up, &mut down, &mut at).unwrap();
         assert_eq!(s.up_bps, 0);
         assert_eq!(s.down_bps, 0);
         assert_eq!(s.up_total, 1024);
@@ -244,8 +242,8 @@ mod tests {
         let mut at: Option<Instant> = None;
         let _ = parse_traffic_frame(r#"{"up":0,"down":0}"#, &mut up, &mut down, &mut at);
         std::thread::sleep(Duration::from_millis(1100));
-        let s = parse_traffic_frame(r#"{"up":1500,"down":6000}"#, &mut up, &mut down, &mut at)
-            .unwrap();
+        let s =
+            parse_traffic_frame(r#"{"up":1500,"down":6000}"#, &mut up, &mut down, &mut at).unwrap();
         // ~1.1s elapsed, 1500 bytes up → ~1300 B/s
         assert!(s.up_bps > 800 && s.up_bps < 2000, "got {}", s.up_bps);
         assert!(s.down_bps > 4000 && s.down_bps < 7000, "got {}", s.down_bps);

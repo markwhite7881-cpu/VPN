@@ -185,10 +185,7 @@ impl Config {
         let inbounds = build_inbounds(settings);
 
         // ---- outbounds ----
-        let outbound_values: Vec<Value> = supported
-            .iter()
-            .map(|o| o.to_singbox_json())
-            .collect();
+        let outbound_values: Vec<Value> = supported.iter().map(|o| o.to_singbox_json()).collect();
         // We need the tag list to wire into the urltest + selector groups.
         let profile_tags: Vec<String> = supported
             .iter()
@@ -555,9 +552,7 @@ fn strip_empty_fields(v: &Value) -> Value {
             }
             Value::Object(out)
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(strip_empty_fields).collect())
-        }
+        Value::Array(arr) => Value::Array(arr.iter().map(strip_empty_fields).collect()),
         other => other.clone(),
     }
 }
@@ -702,10 +697,7 @@ fn build_dns(settings: &GeneratorSettings) -> Value {
     remote_obj.insert("server".into(), Value::String(remote_server));
     if remote_type == "https" {
         // Resolve the DoH hostname via our plain-UDP local resolver.
-        remote_obj.insert(
-            "domain_resolver".into(),
-            Value::String("local".into()),
-        );
+        remote_obj.insert("domain_resolver".into(), Value::String("local".into()));
     } else {
         // Resolve the DoT/DoQ hostname via direct.
         remote_obj.insert("detour".into(), Value::String("direct".into()));
@@ -793,16 +785,21 @@ mod tests {
             "hy2://pw@nl.example.org:443?sni=nl.example.org&obfs=salamander&obfs-password=op#NL-1".to_string(),
             "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@1.2.3.4:8388#SG-1".to_string(),
         ];
-        raw.iter()
-            .map(|s| parse_link(s).expect("parse"))
-            .collect()
+        raw.iter().map(|s| parse_link(s).expect("parse")).collect()
     }
 
     #[test]
     fn produces_all_sections() {
         let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
         let root = cfg.as_object().expect("root object");
-        for k in ["log", "dns", "inbounds", "outbounds", "route", "experimental"] {
+        for k in [
+            "log",
+            "dns",
+            "inbounds",
+            "outbounds",
+            "route",
+            "experimental",
+        ] {
             assert!(root.contains_key(k), "missing section: {k}");
         }
     }
@@ -873,7 +870,9 @@ mod tests {
             .iter()
             .any(|r| r.get("network") == Some(&json!("dns"))));
         // Sniff action (since sniff=true by default)
-        assert!(rules.iter().any(|r| r.get("action") == Some(&json!("sniff"))));
+        assert!(rules
+            .iter()
+            .any(|r| r.get("action") == Some(&json!("sniff"))));
     }
 
     #[test]
@@ -898,23 +897,29 @@ mod tests {
         // the hard-coded DNS-bypass + sniff rules.
         let direct_rule = rules
             .iter()
-            .find(|r| r.get("outbound") == Some(&json!("direct"))
-                && r.get("process_name").is_some())
+            .find(|r| {
+                r.get("outbound") == Some(&json!("direct")) && r.get("process_name").is_some()
+            })
             .expect("direct_processes rule present");
         let vpn_rule = rules
             .iter()
-            .find(|r| r.get("outbound") == Some(&json!("proxy"))
-                && r.get("process_name").is_some())
+            .find(|r| r.get("outbound") == Some(&json!("proxy")) && r.get("process_name").is_some())
             .expect("vpn_processes rule present");
 
         // 1) The lists are emitted verbatim (no normalisation, no
         //    de-dup — that's the UI's job).
         let direct_names: Vec<&str> = direct_rule["process_name"]
-            .as_array().unwrap()
-            .iter().map(|v| v.as_str().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         let vpn_names: Vec<&str> = vpn_rule["process_name"]
-            .as_array().unwrap()
-            .iter().map(|v| v.as_str().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert_eq!(direct_names, vec!["sberbank.exe", "localhost-app"]);
         assert_eq!(vpn_names, vec!["telegram.exe", "chrome.exe"]);
 
@@ -922,8 +927,14 @@ mod tests {
         //    generated `route.rules` list. sing-box processes rules
         //    in order and stops at the first match, so this is what
         //    makes "direct wins when both lists have the same name".
-        let direct_idx = rules.iter().position(|r| std::ptr::eq(r, direct_rule)).unwrap();
-        let vpn_idx = rules.iter().position(|r| std::ptr::eq(r, vpn_rule)).unwrap();
+        let direct_idx = rules
+            .iter()
+            .position(|r| std::ptr::eq(r, direct_rule))
+            .unwrap();
+        let vpn_idx = rules
+            .iter()
+            .position(|r| std::ptr::eq(r, vpn_rule))
+            .unwrap();
         assert!(
             direct_idx < vpn_idx,
             "direct_processes rule must precede vpn_processes rule (got direct at {direct_idx}, vpn at {vpn_idx})"
@@ -959,33 +970,36 @@ mod tests {
             "   ".to_string(),
             "telegram.exe".to_string(),
         ];
-        s.routing.direct_processes = vec![
-            "bank.exe".to_string(),
-            "\t\n".to_string(),
-        ];
+        s.routing.direct_processes = vec!["bank.exe".to_string(), "\t\n".to_string()];
         let cfg = Config::build(&fixture_outbounds(), &s);
         let rules = cfg["route"]["rules"].as_array().unwrap();
 
         // Direct rule: only `bank.exe` survives the filter.
         let direct_rule = rules
             .iter()
-            .find(|r| r.get("outbound") == Some(&json!("direct"))
-                && r.get("process_name").is_some())
+            .find(|r| {
+                r.get("outbound") == Some(&json!("direct")) && r.get("process_name").is_some()
+            })
             .expect("direct_processes rule present after filter");
         let direct_names: Vec<&str> = direct_rule["process_name"]
-            .as_array().unwrap()
-            .iter().map(|v| v.as_str().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert_eq!(direct_names, vec!["bank.exe"]);
 
         // VPN rule: only `telegram.exe` survives.
         let vpn_rule = rules
             .iter()
-            .find(|r| r.get("outbound") == Some(&json!("proxy"))
-                && r.get("process_name").is_some())
+            .find(|r| r.get("outbound") == Some(&json!("proxy")) && r.get("process_name").is_some())
             .expect("vpn_processes rule present after filter");
         let vpn_names: Vec<&str> = vpn_rule["process_name"]
-            .as_array().unwrap()
-            .iter().map(|v| v.as_str().unwrap()).collect();
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert_eq!(vpn_names, vec!["telegram.exe"]);
     }
 
@@ -1045,9 +1059,8 @@ mod tests {
         // `172.19.0.2` (which would put the DNS server *inside*
         // the TUN's own /30 and re-create the original bug at
         // the sing-box level).
-        let dns_v4 = parse_ipv4(&local_dns).unwrap_or_else(|| {
-            panic!("local DNS {local_dns} should be an IPv4 literal")
-        });
+        let dns_v4 = parse_ipv4(&local_dns)
+            .unwrap_or_else(|| panic!("local DNS {local_dns} should be an IPv4 literal"));
         assert!(
             !same_subnet_v4(tun_v4, prefix_v4, dns_v4, 32),
             "local DNS {local_dns} must NOT be in TUN IPv4 {v4_str} (auto-derivation bug)"
@@ -1098,7 +1111,11 @@ mod tests {
         if prefix == 0 {
             return true;
         }
-        let mask = if prefix >= 32 { u32::MAX } else { u32::MAX << (32 - prefix) };
+        let mask = if prefix >= 32 {
+            u32::MAX
+        } else {
+            u32::MAX << (32 - prefix)
+        };
         (net & mask) == (addr & mask)
     }
 
@@ -1126,12 +1143,15 @@ mod tests {
         let head_groups: Vec<u16> = if head.is_empty() {
             Vec::new()
         } else {
-            head.split(':').map(|g| u16::from_str_radix(g, 16).ok()).collect::<Option<_>>()?
+            head.split(':')
+                .map(|g| u16::from_str_radix(g, 16).ok())
+                .collect::<Option<_>>()?
         };
         let tail_groups: Vec<u16> = match tail {
-            Some(t) if !t.is_empty() => {
-                t.split(':').map(|g| u16::from_str_radix(g, 16).ok()).collect::<Option<_>>()?
-            }
+            Some(t) if !t.is_empty() => t
+                .split(':')
+                .map(|g| u16::from_str_radix(g, 16).ok())
+                .collect::<Option<_>>()?,
             _ => Vec::new(),
         };
         let total = head_groups.len() + tail_groups.len();
@@ -1157,7 +1177,11 @@ mod tests {
             return true;
         }
         let shift = 128 - prefix as u32;
-        let mask = if shift >= 128 { 0u128 } else { u128::MAX << shift };
+        let mask = if shift >= 128 {
+            0u128
+        } else {
+            u128::MAX << shift
+        };
         (net & mask) == (addr & mask)
     }
 
@@ -1252,9 +1276,9 @@ mod tests {
         let rs = rules(&cfg);
         let rss = rule_sets(&cfg);
         // The matching rule references the rule-set by tag.
-        assert!(rs.iter().any(|r| {
-            r["rule_set"] == "geosite-ads" && r["action"] == "reject"
-        }));
+        assert!(rs
+            .iter()
+            .any(|r| { r["rule_set"] == "geosite-ads" && r["action"] == "reject" }));
         // And the rule-set entry is a remote `.srs` download.
         assert_eq!(rss.len(), 1);
         assert_eq!(rss[0]["tag"], "geosite-ads");
@@ -1311,10 +1335,7 @@ mod tests {
                 && r["outbound"] == "direct"
         }));
         assert_eq!(rss.len(), 2);
-        let tags: Vec<&str> = rss
-            .iter()
-            .map(|r| r["tag"].as_str().unwrap())
-            .collect();
+        let tags: Vec<&str> = rss.iter().map(|r| r["tag"].as_str().unwrap()).collect();
         assert!(tags.contains(&"geosite-cn"));
         assert!(tags.contains(&"geoip-cn"));
         let cn = rss.iter().find(|r| r["tag"] == "geosite-cn").unwrap();
@@ -1346,9 +1367,9 @@ mod tests {
         let cfg = Config::build(&fixture_outbounds(), &s);
         let rs = rules(&cfg);
         let rss = rule_sets(&cfg);
-        assert!(rs.iter().any(|r| {
-            r["rule_set"] == "geoip-ru" && r["action"] == "route"
-        }));
+        assert!(rs
+            .iter()
+            .any(|r| { r["rule_set"] == "geoip-ru" && r["action"] == "route" }));
         assert_eq!(rss.len(), 1);
         assert_eq!(rss[0]["tag"], "geoip-ru");
         assert!(rss[0]["url"].as_str().unwrap().ends_with("geoip-ru.srs"));
@@ -1394,15 +1415,13 @@ mod tests {
                         "action": "reject"
                     }),
                 ],
-                rule_sets: vec![
-                    json!({
-                        "tag": "geosite-ads",
-                        "type": "remote",
-                        "format": "binary",
-                        "url": "https://example/ads.srs",
-                        "enabled": false
-                    }),
-                ],
+                rule_sets: vec![json!({
+                    "tag": "geosite-ads",
+                    "type": "remote",
+                    "format": "binary",
+                    "url": "https://example/ads.srs",
+                    "enabled": false
+                })],
                 ..RoutingOptions::default()
             },
         );
@@ -1410,7 +1429,10 @@ mod tests {
         let rs = rules(&cfg);
         let rss = rule_sets(&cfg);
         // Only the enabled IPv6 reject survives.
-        assert_eq!(rs.iter().filter(|r| r.get("ip_version").is_some()).count(), 1);
+        assert_eq!(
+            rs.iter().filter(|r| r.get("ip_version").is_some()).count(),
+            1
+        );
         // Rule-set is disabled → not emitted.
         assert!(rss.is_empty(), "disabled rule-sets should not be emitted");
     }
@@ -1477,8 +1499,14 @@ mod tests {
         assert_eq!(user["process_name"], json!(["telegram.exe"]));
         // UI-only fields stripped.
         assert!(user.get("id").is_none(), "UI-only 'id' should be stripped");
-        assert!(user.get("label").is_none(), "UI-only 'label' should be stripped");
-        assert!(user.get("enabled").is_none(), "UI-only 'enabled' should be stripped");
+        assert!(
+            user.get("label").is_none(),
+            "UI-only 'label' should be stripped"
+        );
+        assert!(
+            user.get("enabled").is_none(),
+            "UI-only 'enabled' should be stripped"
+        );
     }
 
     #[test]
@@ -1550,9 +1578,7 @@ mod tests {
             },
         );
         let cfg = Config::build(&fixture_outbounds(), &s);
-        assert_eq!(
-            cfg["route"]["default_http_client"], "rule-set-fetcher"
-        );
+        assert_eq!(cfg["route"]["default_http_client"], "rule-set-fetcher");
     }
 
     #[test]

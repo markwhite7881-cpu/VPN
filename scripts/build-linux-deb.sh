@@ -19,7 +19,7 @@
 #
 # Usage (from WSL2):
 #   cd /home/cloakwire
-#   ./scripts/build-linux-deb.sh 1.0.3
+#   ./scripts/build-linux-deb.sh 1.3.0
 #
 # Requirements:
 #   - WSL2 with the cloakwire user (see the setup notes in
@@ -36,7 +36,7 @@ set -euo pipefail
 BUILD_USER="$(id -un)"
 export PATH="/home/${BUILD_USER}/.cargo/bin:$PATH"
 
-VERSION="${1:-1.0.3}"
+VERSION="${1:-1.3.0}"
 
 # Resolve the WSL-side project root (this script lives at
 # scripts/build-linux-deb.sh; the actual cargo project is one
