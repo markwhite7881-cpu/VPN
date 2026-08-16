@@ -93,12 +93,17 @@ jobs:
             cargo-android-
 
       - name: Install gomobile + gobind
-        # v0.1.12 is the version verified locally (Go 1.25 compatible).
+        # golang.org/x/mobile uses pseudo-versions rather than v0.1.x tags.
+        # Pin a revision from the Go module proxy so both tools are reproducible
+        # and compatible with the Go version configured above.
+        env:
+          GOMOBILE_VERSION: "v0.0.0-20260813181013-1960c775504c"
         run: |
           set -e
-          go install golang.org/x/mobile/cmd/gomobile@v0.1.12
-          go install golang.org/x/mobile/cmd/gobind@v0.1.12
-          gomobile version
+          go install "golang.org/x/mobile/cmd/gomobile@${GOMOBILE_VERSION}"
+          go install "golang.org/x/mobile/cmd/gobind@${GOMOBILE_VERSION}"
+          "$(go env GOPATH)/bin/gomobile" version
+          "$(go env GOPATH)/bin/gobind" -help > /dev/null
 
       - name: Build libbox.aar from Leadaxe/sing-box-lx fork
         # Same recipe as the verified local build (all 4 ABIs here vs
