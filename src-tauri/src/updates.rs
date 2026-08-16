@@ -1,9 +1,7 @@
 //! Auto-update for the bundled `sing-box` core.
 //!
-//! The Tauri updater (see `tauri.conf.json > plugins.updater` and
-//! `tauri-plugin-updater` registered in `lib.rs`) handles the
-//! **app shell** — Tauri releases on GitHub get a signed
-//! `latest.json` and the app offers one-click install.
+//! App-shell updates are handled by `app_update`, which fetches and verifies
+//! signed GitHub release artifacts using the project's rustls transport.
 //!
 //! `sing-box` itself is a separate thing. We bundle a specific
 //! `sing-box-x86_64-pc-windows-msvc.exe` in the installer, and

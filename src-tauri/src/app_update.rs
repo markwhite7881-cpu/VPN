@@ -110,14 +110,53 @@ fn parse_https_url(raw: &str) -> AppResult<Url> {
     Ok(url)
 }
 
-fn trusted_redirect_url(url: &Url) -> AppResult<()> {
+fn validate_redirect_url(url: &Url) -> AppResult<()> {
     if url.scheme() != "https" || url.username() != "" || url.password().is_some() || url.port().is_some() {
         return Err(app_error("redirect URL must be plain HTTPS"));
     }
-    match url.host_str() {
-        Some(GITHUB_HOST | RELEASE_ASSETS_HOST) => Ok(()),
-        _ => Err(app_error("redirect host is not trusted")),
+    Ok(())
+}
+
+fn tagged_manifest_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix(RELEASE_PATH_PREFIX) else { return false; };
+    let mut segments = rest.split('/');
+    matches!((segments.next(), segments.next(), segments.next()), (Some(tag), Some("latest.json"), None) if !tag.is_empty())
+}
+
+fn validate_manifest_redirect(current: &Url, next: &Url) -> AppResult<()> {
+    validate_redirect_url(next)?;
+    match (current.host_str(), next.host_str()) {
+        (Some(GITHUB_HOST), Some(GITHUB_HOST))
+            if current.path() == MANIFEST_PATH && tagged_manifest_path(next.path()) => Ok(()),
+        (Some(GITHUB_HOST), Some(RELEASE_ASSETS_HOST))
+            if tagged_manifest_path(current.path()) && !next.path().is_empty() => Ok(()),
+        _ => Err(app_error("manifest redirect escapes the configured release-manifest route")),
     }
+}
+
+fn validate_artifact_redirect(current: &Url, next: &Url) -> AppResult<()> {
+    validate_redirect_url(next)?;
+    if current.host_str() == Some(GITHUB_HOST)
+        && next.host_str() == Some(RELEASE_ASSETS_HOST)
+        && !next.path().is_empty()
+    {
+        return Ok(());
+    }
+    Err(app_error("artifact redirect escapes the configured release asset route"))
+}
+
+fn validate_final_response(requested: &Url, final_url: &Url, artifact: bool) -> AppResult<()> {
+    if requested != final_url {
+        return Err(app_error("final response URL differs from its validated request URL"));
+    }
+    if artifact {
+        if final_url.host_str() != Some(RELEASE_ASSETS_HOST) || final_url.path().is_empty() {
+            return Err(app_error("artifact final response is not the bound release-assets URL"));
+        }
+    } else if final_url.host_str() != Some(RELEASE_ASSETS_HOST) && !tagged_manifest_path(final_url.path()) {
+        return Err(app_error("manifest final response is not a bound release manifest URL"));
+    }
+    Ok(())
 }
 
 fn validate_manifest_url(raw: &str) -> AppResult<Url> {
@@ -184,14 +223,18 @@ async fn get_trusted(client: &reqwest::Client, initial: Url, artifact: bool) -> 
                 .ok_or_else(|| app_error("redirect response has no Location header"))?
                 .to_str().map_err(|_| app_error("redirect Location is not valid text"))?;
             let next = url.join(location).map_err(|error| app_error(format!("invalid redirect URL: {error}")))?;
-            trusted_redirect_url(&next)?;
+            if artifact {
+                validate_artifact_redirect(&url, &next)?;
+            } else {
+                validate_manifest_redirect(&url, &next)?;
+            }
             url = next;
             continue;
         }
         if !response.status().is_success() {
             return Err(AppError::Network(format!("updater server returned {}", response.status())));
         }
-        trusted_redirect_url(response.url())?;
+        validate_final_response(&url, response.url(), artifact)?;
         return Ok(response);
     }
     Err(app_error("too many redirects"))
@@ -254,12 +297,46 @@ pub async fn install_app_update(_app: AppHandle, expected_version: Option<String
 mod tests {
     use super::*;
 
-    fn configured_manifest_matches_tauri_configuration() {
-        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let updater = &config["plugins"]["updater"];
-        assert_eq!(updater["endpoints"][0].as_str(), Some(UPDATER_MANIFEST_URL));
-        assert_eq!(updater["pubkey"].as_str(), Some(UPDATER_PUBLIC_KEY));
+    #[test]
+    fn accepts_tagged_manifest_redirect_only() {
+        let current = validate_manifest_url(UPDATER_MANIFEST_URL).unwrap();
+        let tagged = Url::parse("https://github.com/markwhite7881-cpu/cloakwire/releases/download/v1.2.3/latest.json").unwrap();
+        assert!(validate_manifest_redirect(&current, &tagged).is_ok());
+    }
+
+    #[test]
+    fn rejects_manifest_redirect_path_escape() {
+        let current = validate_manifest_url(UPDATER_MANIFEST_URL).unwrap();
+        let escaped = Url::parse("https://github.com/markwhite7881-cpu/cloakwire/releases/download/v1.2.3/installer.exe").unwrap();
+        assert!(validate_manifest_redirect(&current, &escaped).is_err());
+    }
+
+    #[test]
+    fn rejects_artifact_redirect_repository_escape() {
+        let current = validate_release_asset_url("https://github.com/markwhite7881-cpu/cloakwire/releases/download/v1.2.3/update.exe").unwrap();
+        let escaped = Url::parse("https://github.com/attacker/cloakwire/releases/download/v1.2.3/update.exe").unwrap();
+        assert!(validate_artifact_redirect(&current, &escaped).is_err());
+    }
+
+    #[test]
+    fn rejects_artifact_redirect_path_escape() {
+        let current = validate_release_asset_url("https://github.com/markwhite7881-cpu/cloakwire/releases/download/v1.2.3/update.exe").unwrap();
+        let escaped = Url::parse("https://github.com/markwhite7881-cpu/cloakwire/releases/download/v1.2.3/other.exe").unwrap();
+        assert!(validate_artifact_redirect(&current, &escaped).is_err());
+    }
+
+    #[test]
+    fn accepts_bound_release_assets_redirect() {
+        let current = validate_release_asset_url("https://github.com/markwhite7881-cpu/cloakwire/releases/download/v1.2.3/update.exe").unwrap();
+        let redirect = Url::parse("https://release-assets.githubusercontent.com/github-production-release-asset/123?sig=bound").unwrap();
+        assert!(validate_artifact_redirect(&current, &redirect).is_ok());
+    }
+
+    #[test]
+    fn trusted_update_constants_are_exact_release_routes() {
         assert!(validate_manifest_url(UPDATER_MANIFEST_URL).is_ok());
+        let key = base64::engine::general_purpose::STANDARD.decode(UPDATER_PUBLIC_KEY).unwrap();
+        assert!(String::from_utf8(key).unwrap().starts_with("untrusted comment: minisign public key:"));
     }
 
     #[test]
