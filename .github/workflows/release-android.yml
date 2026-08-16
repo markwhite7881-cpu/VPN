@@ -1,0 +1,194 @@
+name: release-android
+
+# Build the Cloakwire Android APK on every push to the linux/macos-build
+# branch (shared dev branch for non-Windows ports) and on tag pushes.
+#
+# What this does that a plain `tauri android build` does NOT:
+#   1. Builds libbox.aar (the sing-box Android library, gomobile bind
+#      output) from the Leadaxe/sing-box-lx fork — the AAR is a 28MB
+#      prebuilt binary that is deliberately NOT committed to git
+#      (see .gitignore: src-tauri/gen/android/app/libs/*.aar).
+#   2. Installs the exact NDK (28.0.13004108) the local builds use.
+#   3. Builds debug APK (auto-signed with the Android debug key —
+#      installable straight away) and an unsigned release APK.
+#
+# Release signing: add these repo secrets and the sign step activates
+# automatically:
+#   ANDROID_KEYSTORE_BASE64  — base64 of the .jks/.keystore file
+#   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Without them the release APK stays unsigned (debug APK still works
+# for sideloading / testing).
+
+on:
+  push:
+    branches:
+      - linux/macos-build
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: build APK
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: "28.0.13004108"
+      # secrets context can't be used in `if:` directly — bounce it
+      # through env first. Expression evaluates to "true"/"false".
+      HAVE_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          # sing-box-lx fork go.mod requires go >= 1.25.5
+          go-version: "1.25"
+          check-latest: true
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Android NDK
+        # ubuntu-latest runners ship the Android SDK at $ANDROID_HOME
+        # but not our exact NDK. AGP 8.11 supports NDK 28; gomobile
+        # needs ANDROID_NDK_HOME to find the clang toolchains.
+        run: |
+          set -e
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          ls "$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" | head -5
+
+      - name: Setup Rust (android targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, i686-linux-android, x86_64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-android-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            cargo-android-
+
+      - name: Install gomobile + gobind
+        # v0.1.12 is the version verified locally (Go 1.25 compatible).
+        run: |
+          set -e
+          go install golang.org/x/mobile/cmd/gomobile@v0.1.12
+          go install golang.org/x/mobile/cmd/gobind@v0.1.12
+          gomobile version
+
+      - name: Build libbox.aar from Leadaxe/sing-box-lx fork
+        # Same recipe as the verified local build (all 4 ABIs here vs
+        # arm64-only locally — `-target android` = arm64,arm,386,amd64).
+        # NOTES on flags (learned the hard way):
+        #   * -javapkg=io.nekohasekai : package name our Kotlin code
+        #     imports (matches sing-box for Android / SFA).
+        #   * -libname=box : produces jni/<abi>/libbox.so.
+        #   * -checklinkname=0 in ldflags is MANDATORY with Go 1.25 +
+        #     the badlinkname/tfogo_checklinkname0 tags below — sing-box
+        #     uses //go:linkname hacks that Go 1.23+ rejects otherwise.
+        #   * runtime.godebugDefault=... : re-enables legacy TLS bits
+        #     some REALITY/VLESS servers still need (same as desktop).
+        run: |
+          set -e
+          git clone --depth 1 --branch lx --recurse-submodules --shallow-submodules \
+            https://github.com/Leadaxe/sing-box-lx.git /tmp/sing-box-src
+          cd /tmp/sing-box-src
+          VER="$(git describe --tags --always)+android.$(git rev-parse --short HEAD)"
+          echo "libbox version: $VER"
+          BUILD_TAGS="with_gvisor,with_quic,with_wireguard,with_utls,with_naive_outbound,badlinkname,tfogo_checklinkname0,with_xhttp,with_awg,with_lx_command,with_lx_idle_suspend,with_openvpn,with_openconnect,with_clash_api"
+          mkdir -p "$GITHUB_WORKSPACE/src-tauri/gen/android/app/libs"
+          gomobile bind -v \
+            -o "$GITHUB_WORKSPACE/src-tauri/gen/android/app/libs/libbox.aar" \
+            -target android \
+            -androidapi 24 \
+            -javapkg=io.nekohasekai \
+            -libname=box \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags="-X github.com/sagernet/sing-box/constant.Version=$VER -X runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1 -checklinkname=0 -s -w -buildid=" \
+            -tags="$BUILD_TAGS" \
+            ./experimental/libbox
+          ls -la "$GITHUB_WORKSPACE/src-tauri/gen/android/app/libs/libbox.aar"
+          # sanity: all 4 ABIs must be inside the AAR
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            unzip -l "$GITHUB_WORKSPACE/src-tauri/gen/android/app/libs/libbox.aar" \
+              | grep -q "jni/$abi/libbox.so" || { echo "::error::libbox.so missing for $abi"; exit 1; }
+          done
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build debug APK
+        # Debug build is signed with the auto-generated Android debug
+        # key by AGP — installable on devices as-is.
+        run: npx tauri android build --apk --verbose
+
+      - name: Build release APK
+        run: npx tauri android build --apk --release --verbose
+
+      - name: Sign release APK (when keystore secrets exist)
+        if: env.HAVE_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -e
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+          APK=$(ls -1 src-tauri/gen/android/app/build/outputs/apk/universal/release/*-unsigned.apk | head -1)
+          "$ANDROID_HOME/build-tools/"*/apksigner sign \
+            --ks /tmp/release.keystore \
+            --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
+            --key-pass "pass:$ANDROID_KEY_PASSWORD" \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --out src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+            "$APK"
+          "$ANDROID_HOME/build-tools/"*/apksigner verify --print-certs \
+            src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk
+
+      - name: Collect artifacts
+        run: |
+          set -e
+          mkdir -p dist
+          VER=$(node -p "require('./package.json').version")
+          cp src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk \
+             "dist/Cloakwire_${VER}_android_universal_debug.apk"
+          if [ -f src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk ]; then
+            cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk \
+               "dist/Cloakwire_${VER}_android_universal_release.apk"
+          else
+            cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk \
+               "dist/Cloakwire_${VER}_android_universal_release-unsigned.apk"
+          fi
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloakwire-android
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

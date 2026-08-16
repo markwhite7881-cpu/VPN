@@ -14,6 +14,27 @@ use crate::error::{AppError, AppResult};
 use crate::parser::{self, Outbound};
 use crate::process::{LogLine, ProcessManager, StatusReport};
 
+/// Writable scratch directory for generated/validated configs.
+///
+/// Desktop uses the OS temp dir (configs are throwaway there). On
+/// Android there is no usable temp dir for an app process, so we use
+/// the app-private data dir — which is also exactly where the Kotlin
+/// VpnService can read the file back (same uid).
+fn scratch_dir(app: &AppHandle) -> PathBuf {
+    #[cfg(target_os = "android")]
+    {
+        app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        app.path()
+            .temp_dir()
+            .unwrap_or_else(|_| std::env::temp_dir())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SingboxVersion {
     pub version: String,
@@ -213,10 +234,7 @@ pub async fn ping() -> AppResult<String> {
 /// before subscription parsing lands.
 #[tauri::command]
 pub async fn write_default_config(app: AppHandle) -> AppResult<String> {
-    let dir = app
-        .path()
-        .temp_dir()
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let dir = scratch_dir(&app);
     std::fs::create_dir_all(&dir).map_err(AppError::Io)?;
     let path = dir.join("config.default.json");
     let body = serde_json::json!({
@@ -364,13 +382,7 @@ pub async fn save_config_to_path(
     let body = serde_json::to_vec_pretty(&content).map_err(AppError::Serde)?;
     let path = match path {
         Some(p) if !p.trim().is_empty() => std::path::PathBuf::from(p),
-        _ => {
-            let dir = app
-                .path()
-                .temp_dir()
-                .unwrap_or_else(|_| std::env::temp_dir());
-            dir.join("config.generated.json")
-        }
+        _ => scratch_dir(&app).join("config.generated.json"),
     };
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -389,10 +401,7 @@ pub async fn check_config_with_binary(
 ) -> AppResult<String> {
     // Write to a temp file (sing-box needs a path), then ask the
     // sidecar to validate it.
-    let dir = app
-        .path()
-        .temp_dir()
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let dir = scratch_dir(&app);
     let path = dir.join("config.check.json");
     let body = serde_json::to_vec_pretty(&config).map_err(AppError::Serde)?;
     std::fs::write(&path, body).map_err(AppError::Io)?;
@@ -549,6 +558,24 @@ pub async fn stop_traffic(pm: State<'_, Arc<ProcessManager>>) -> AppResult<()> {
     Ok(())
 }
 
+/// Point the Clash API helper at a controller URL without going
+/// through `start_singbox_with_config`.
+///
+/// Desktop never needs this (pm.start sets the URL as part of the
+/// sidecar spawn). On Android the core is started by the Kotlin
+/// VpnService via libbox, so after the VPN comes up the frontend
+/// calls this once with `http://127.0.0.1:9090` and the shared
+/// `list_proxies` / `test_delay` / `start_traffic` commands keep
+/// working unchanged.
+#[tauri::command]
+pub async fn set_controller_url(
+    pm: State<'_, Arc<ProcessManager>>,
+    url: Option<String>,
+) -> AppResult<()> {
+    pm.set_controller_url(url).await;
+    Ok(())
+}
+
 // --- System proxy (Windows only) -------------------------------------
 //
 // When sing-box runs in system_proxy mode we have to also tell
@@ -573,7 +600,11 @@ pub async fn clear_system_proxy() -> AppResult<()> {
 // `get_autostart` / `set_autostart` instead of letting the frontend
 // poke the plugin directly so the surface stays symmetrical with the
 // other commands and we can swap backends later (e.g. Task Scheduler).
+// Android has no login-item concept for a VPN client (the OS owns
+// always-on VPN), so the plugin isn't compiled in there and the
+// commands are stubs.
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn get_autostart(app: AppHandle) -> AppResult<bool> {
     use tauri_plugin_autostart::ManagerExt;
@@ -582,6 +613,7 @@ pub async fn get_autostart(app: AppHandle) -> AppResult<bool> {
         .map_err(|e| AppError::Clash(format!("autostart probe failed: {e}")))
 }
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<bool> {
     use tauri_plugin_autostart::ManagerExt;
@@ -595,6 +627,19 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<bool> {
     }
     mgr.is_enabled()
         .map_err(|e| AppError::Clash(format!("autostart recheck failed: {e}")))
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn get_autostart() -> AppResult<bool> {
+    Err(AppError::Unsupported("autostart".to_string()))
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn set_autostart(enabled: bool) -> AppResult<bool> {
+    let _ = enabled;
+    Err(AppError::Unsupported("autostart".to_string()))
 }
 
 // --- Subscriptions -----------------------------------------------------

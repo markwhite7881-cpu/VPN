@@ -453,6 +453,15 @@ impl ProcessManager {
         self.controller_url.lock().await.clone()
     }
 
+    /// Set (or clear) the Clash API controller URL without spawning a
+    /// sidecar. Used on Android, where the sing-box core runs inside
+    /// the Kotlin VpnService (libbox) and simply starts listening on
+    /// 127.0.0.1:9090 — the Rust side still needs the URL so the
+    /// shared clash_api / traffic commands work unchanged.
+    pub async fn set_controller_url(&self, url: Option<String>) {
+        *self.controller_url.lock().await = url;
+    }
+
     /// Borrow the live traffic-stream handle (for the `traffic_*`
     /// Tauri commands).
     pub fn traffic(&self) -> Arc<TrafficStream> {

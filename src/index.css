@@ -116,6 +116,43 @@
   }
 }
 
+@keyframes mobile-view-enter-next {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes mobile-view-enter-previous {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.mobile-view-enter-next {
+  animation: mobile-view-enter-next 200ms ease-out both;
+}
+
+.mobile-view-enter-previous {
+  animation: mobile-view-enter-previous 200ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-view-enter-next,
+  .mobile-view-enter-previous {
+    animation: none;
+  }
+}
+
 /* The Advanced section in the Routing tab uses an uncontrolled
  * <details> with a CSS-driven arrow. React state isn't needed —
  * the browser already tracks the open state, and forcing a controlled

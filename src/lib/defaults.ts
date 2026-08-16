@@ -40,6 +40,10 @@ export const DEFAULT_SETTINGS: GeneratorSettings = {
     final_outbound: "proxy",
     auto_detect_interface: true,
     default_domain_resolver: "local",
+    // Android per-app routing: capture every app by default.
+    // Values mirror config/mod.rs ("all" | "include" | "exclude").
+    tun_app_mode: "all",
+    tun_app_list: [],
   },
   clash_api: {
     external_controller: "127.0.0.1:9090",

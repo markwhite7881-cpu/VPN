@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use tauri::Manager;
+#[cfg(not(target_os = "android"))]
 use tauri_plugin_autostart::MacosLauncher;
 
 pub mod app_update;
@@ -26,6 +27,19 @@ pub mod updates;
 
 use process::ProcessManager;
 
+/// Registers the app-local Kotlin VPN plugin (`ru.classquiz.singbox
+/// .VpnPlugin`). The plugin name "vpn" is what the frontend uses:
+/// `invoke("plugin:vpn|start", ...)` / `addPluginListener("vpn", ...)`.
+#[cfg(target_os = "android")]
+fn vpn_mobile_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("vpn")
+        .setup(|_app, api| {
+            api.register_android_plugin("ru.classquiz.singbox.vpn", "VpnPlugin")?;
+            Ok(())
+        })
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Best-effort logger init. RUST_LOG=info turns it on by default.
@@ -36,10 +50,15 @@ pub fn run() {
 
     let manager = Arc::new(ProcessManager::new());
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    // Desktop-only plugins: process relaunch, shell updater and
+    // autostart. On Android the core runs inside the Kotlin
+    // VpnService (libbox) and these plugins aren't even compiled in.
+    #[cfg(not(target_os = "android"))]
+    let builder = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
@@ -47,7 +66,10 @@ pub fn run() {
             // Forward the `--minimized` flag (no-op on Windows/Linux)
             // so the user can opt into starting in the background.
             Some(vec!["--minimized"]),
-        ))
+        ));
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(vpn_mobile_plugin());
+    builder
         .manage(manager)
         .setup(|app| {
             // We're now inside Tauri's tokio runtime, safe to spawn.
@@ -103,6 +125,7 @@ pub fn run() {
             commands::lookup_geoip,
             commands::start_traffic,
             commands::stop_traffic,
+            commands::set_controller_url,
             commands::fetch_subscription,
             commands::get_autostart,
             commands::set_autostart,

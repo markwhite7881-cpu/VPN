@@ -1,0 +1,26 @@
+# App-local mobile plugin "vpn" (Kotlin: ru.classquiz.singbox.vpn.VpnPlugin).
+# Its commands are @Command-annotated Kotlin methods discovered at runtime,
+# so no compile-time allow-* permissions exist — we define them here.
+
+[[permission]]
+identifier = "allow-commands"
+description = "Allows the Cloakwire frontend to drive the Android VpnService plugin"
+commands.allow = [
+  "prepare",
+  "start",
+  "stop",
+  "status",
+  "listApps",
+  "coreVersion",
+  "readLogs",
+  "registerListener",
+  "removeListener",
+]
+
+# CRITICAL: `vpn:default` in a capability resolves ONLY via the manifest's
+# `default_permission` field — which is populated by this top-level [default]
+# table, NOT by a [[set]] named "default" (a named set is invisible to
+# `Resolved::resolve` for the "default" name and silently yields zero commands).
+[default]
+description = "Default permissions for the vpn plugin"
+permissions = ["allow-commands"]

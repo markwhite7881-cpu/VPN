@@ -13,7 +13,15 @@ fn main() {
     // We read the manifest from `app.manifest` at build time so the
     // XML stays in its own file (easier to read / validate) instead
     // of being embedded as a raw string in build.rs.
-    let mut attrs = tauri_build::Attributes::new();
+    // Register the app-local Android VPN plugin ("vpn") so its permission
+    // manifest (src-tauri/permissions/vpn/**) is embedded into the ACL
+    // runtime authority — without this the webview gets
+    // "vpn.<cmd> not allowed. Plugin not found".
+    let mut attrs = tauri_build::Attributes::new().plugin(
+        "vpn",
+        tauri_build::InlinedPlugin::new(),
+    );
+    println!("cargo:rerun-if-changed=permissions");
     #[cfg(windows)]
     {
         let manifest_path = std::path::Path::new("app.manifest");

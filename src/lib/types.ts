@@ -294,6 +294,15 @@ export interface RoutingOptions {
   auto_detect_interface: boolean;
   /** `route.default_domain_resolver` tag (usually "local"). */
   default_domain_resolver: string;
+  /**
+   * Android only: which apps the VpnService captures at all.
+   * Values mirror the Rust side (`config/mod.rs`): "all" (default),
+   * "include" (only `tun_app_list` uses the VPN), "exclude"
+   * (everything except `tun_app_list`). Ignored on desktop.
+   */
+  tun_app_mode?: "all" | "include" | "exclude";
+  /** Android only: package names for `tun_app_mode`. */
+  tun_app_list?: string[];
 }
 
 /** v0.1.0 routing shape — only used by the silent migration. */

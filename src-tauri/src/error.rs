@@ -46,6 +46,13 @@ pub enum AppError {
 
     #[error("tauri error: {0}")]
     Tauri(#[from] tauri::Error),
+
+    /// The command exists in the shared handler list but has no
+    /// meaningful implementation on this platform (e.g. spawning a
+    /// sing-box sidecar on Android, where the core runs inside the
+    /// Kotlin VpnService via libbox).
+    #[error("not supported on this platform: {0}")]
+    Unsupported(String),
 }
 
 impl Serialize for AppError {
@@ -67,6 +74,7 @@ impl Serialize for AppError {
             AppError::Clash(_) => ("clash", self.to_string()),
             AppError::Network(_) => ("network", self.to_string()),
             AppError::Tauri(_) => ("tauri", self.to_string()),
+            AppError::Unsupported(_) => ("unsupported", self.to_string()),
         };
         let mut st = s.serialize_struct("AppError", 2)?;
         st.serialize_field("kind", kind)?;

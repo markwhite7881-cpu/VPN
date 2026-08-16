@@ -2,8 +2,29 @@
 /dist
 /node_modules
 /src-tauri/target
-/src-tauri/gen
 /src-tauri/Cargo.lock
+
+# Tauri generated mobile/desktop projects: gen/ is mostly build junk,
+# BUT gen/android contains our hand-written Kotlin VPN layer, manifest
+# and gradle customizations — those MUST be tracked (Tauri docs also
+# recommend committing the generated Android project once customized).
+# So instead of ignoring all of gen/, ignore only derived artifacts:
+/src-tauri/gen/schemas
+/src-tauri/gen/android/.gradle
+/src-tauri/gen/android/.idea
+/src-tauri/gen/android/.cxx
+/src-tauri/gen/android/build
+/src-tauri/gen/android/local.properties
+/src-tauri/gen/android/**/build
+/src-tauri/gen/android/**/*.iml
+# libbox.aar is a 28MB prebuilt binary — CI rebuilds it from the
+# Leadaxe/sing-box-lx fork (see .github/workflows/release-android.yml),
+# so the AAR itself is not committed.
+/src-tauri/gen/android/app/libs/*.aar
+# Never commit Android signing material.
+/src-tauri/gen/android/key.properties
+/src-tauri/gen/android/**/*.keystore
+/src-tauri/gen/android/**/*.jks
 
 # Windows sing-box sidecar (and its runtime DLLs). macOS / Linux
 # sidecars (no extension / .app bundles / AppImage) are NOT ignored
@@ -41,6 +62,15 @@ Thumbs.db
 TAG_MESSAGE.txt
 .wsl/
 dist-release/
+
+# Local Android build scratch: NDK zip (~750MB), gomobile output AAR,
+# extracted jars, logs. CI rebuilds all of this from scratch.
+/.android-build/
+
+# A file literally named "NUL" — Windows reserved-name artifact from a
+# mis-redirected shell command; must never be committed (git on
+# Windows can't even check it out cleanly).
+NUL
 
 # Generated latest.json (Tauri updater manifest) lives next to the
 # project root on a release engineer machine. NEVER committed; we

@@ -44,18 +44,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-autostart = "2"
-# `relaunch()` from @tauri-apps/plugin-process. Required so the
-# Tauri updater can re-exec the binary after `downloadAndInstall`.
-tauri-plugin-process = "2"
-# Auto-update for the app shell. Reads the manifest hosted on
-# GitHub Releases (see tauri.conf.json > plugins.updater.endpoints)
-# and applies signed updates. The matching npm package is
-# @tauri-apps/plugin-updater (used by the frontend). The plugin
-# requires a public key (in tauri.conf.json) and a private key
-# (in the project root, see scripts/release.sh) generated via
-# `npx tauri signer generate`.
-tauri-plugin-updater = "2"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -110,6 +98,27 @@ flate2 = "1"
 # that worked on Windows because cfg(windows) accidentally included
 # it, and broke on Linux where the dep was missing entirely.)
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+
+# Desktop-only Tauri plugins. On Android there is no sidecar, no
+# system proxy and no installer-based self-update: the core runs
+# inside the Kotlin VpnService (libbox), so these three plugins have
+# no meaning there and are excluded from mobile builds entirely.
+#
+# - tauri-plugin-autostart: Windows/macOS login-item / LaunchAgent.
+# - tauri-plugin-process: `relaunch()` from @tauri-apps/plugin-process,
+#   required so the desktop updater can re-exec the binary after
+#   `downloadAndInstall`.
+# - tauri-plugin-updater: auto-update for the desktop app shell. Reads
+#   the manifest hosted on GitHub Releases (see tauri.conf.json >
+#   plugins.updater.endpoints) and applies signed updates. The matching
+#   npm package is @tauri-apps/plugin-updater (used by the frontend).
+#   The plugin requires a public key (in tauri.conf.json) and a private
+#   key (in the project root, see scripts/release.sh) generated via
+#   `npx tauri signer generate`.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 
 # Windows-only deps. We use #[cfg(windows)] blocks in the code to gate
 # the Windows-specific calls; `winreg` is the registry API for

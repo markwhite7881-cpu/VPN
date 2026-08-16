@@ -80,6 +80,25 @@ pub struct RoutingOptions {
     /// `route.default_domain_resolver` — the tag of the DNS server used
     /// to resolve outbound hostnames. Almost always "local".
     pub default_domain_resolver: String,
+    /// Android only: which apps the VpnService captures at all.
+    ///   "all"     — every app goes through the tunnel (default);
+    ///   "include" — ONLY packages in `tun_app_list` use the VPN;
+    ///   "exclude" — everything EXCEPT `tun_app_list` uses the VPN.
+    /// Emitted as `include_package` / `exclude_package` on the tun
+    /// inbound; the Kotlin service reads them back via libbox's
+    /// TunOptions and applies them to VpnService.Builder. Ignored on
+    /// desktop.
+    #[serde(default = "default_tun_app_mode")]
+    pub tun_app_mode: String,
+    /// Android only: package names for `tun_app_mode` (e.g.
+    /// "org.telegram.messenger"). Ignored when the mode is "all" and
+    /// on desktop.
+    #[serde(default)]
+    pub tun_app_list: Vec<String>,
+}
+
+fn default_tun_app_mode() -> String {
+    "all".to_string()
 }
 
 fn default_true() -> bool {
@@ -147,6 +166,8 @@ impl Default for RoutingOptions {
             final_outbound: "proxy".to_string(),
             auto_detect_interface: true,
             default_domain_resolver: "local".to_string(),
+            tun_app_mode: default_tun_app_mode(),
+            tun_app_list: Vec::new(),
         }
     }
 }
@@ -318,18 +339,38 @@ impl Config {
 
 // ---- builders ------------------------------------------------------
 
+/// Android's VpnService uses the gVisor userspace TUN stack for TCP.
+/// Desktop retains the native system stack.
+fn tun_stack(android: bool) -> &'static str {
+    if android { "gvisor" } else { "system" }
+}
+
 fn build_inbounds(settings: &GeneratorSettings) -> Vec<Value> {
     let mut arr: Vec<Value> = Vec::new();
-    let mode = settings.tunnel_mode;
-    let want_tun = matches!(mode, TunnelMode::Tun | TunnelMode::Both);
-    let want_mixed = matches!(mode, TunnelMode::SystemProxy | TunnelMode::Both);
+    // On Android the VpnService TUN is the ONLY possible inbound —
+    // there is no sidecar and no system proxy, so the desktop
+    // tunnel_mode setting is ignored and we always emit exactly one
+    // tun inbound.
+    #[cfg(target_os = "android")]
+    let (want_tun, want_mixed) = (true, false);
+    #[cfg(not(target_os = "android"))]
+    let (want_tun, want_mixed) = (
+        matches!(settings.tunnel_mode, TunnelMode::Tun | TunnelMode::Both),
+        matches!(
+            settings.tunnel_mode,
+            TunnelMode::SystemProxy | TunnelMode::Both
+        ),
+    );
 
     if want_tun {
         let interface = settings
             .tun_interface_name
             .clone()
             .unwrap_or_else(|| "singbox-tun".to_string());
-        arr.push(json!({
+        // `mut` is only used by the Android include/exclude_package
+        // block below; on desktop the json! literal is final.
+        #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
+        let mut tun = json!({
             "type": "tun",
             "tag": "tun-in",
             // sing-box 1.12+ removed the legacy `inet4_address` /
@@ -339,13 +380,43 @@ fn build_inbounds(settings: &GeneratorSettings) -> Vec<Value> {
                 "fdfe:dcba:9876::1/126"
             ],
             "auto_route": true,
-            "strict_route": true,
-            "stack": "system",
+            // Android: strict_route=true drops packets because VpnService
+            // routes live in a separate netns; the system routing table
+            // doesn't see them. Desktop keeps true (correct for wintun/tun).
+            "strict_route": cfg!(not(target_os = "android")),
+            "stack": tun_stack(cfg!(target_os = "android")),
             "mtu": 9000,
             "endpoint_independent_nat": false,
             "udp_timeout": "5m",
             "interface_name": interface,
-        }));
+        });
+        // Android per-app routing, level 1 (system): which packages
+        // the VpnService captures at all. libbox parses these fields
+        // and exposes them through TunOptions.GetIncludePackage() /
+        // GetExcludePackage(); the Kotlin service applies them to
+        // VpnService.Builder.addAllowed/DisallowedApplication.
+        #[cfg(target_os = "android")]
+        {
+            let list: Vec<String> = settings
+                .routing
+                .tun_app_list
+                .iter()
+                .filter(|p| !p.trim().is_empty())
+                .cloned()
+                .collect();
+            if !list.is_empty() {
+                match settings.routing.tun_app_mode.as_str() {
+                    "include" => {
+                        tun["include_package"] = json!(list);
+                    }
+                    "exclude" => {
+                        tun["exclude_package"] = json!(list);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        arr.push(tun);
     }
 
     if want_mixed {
@@ -424,6 +495,16 @@ fn build_route(settings: &GeneratorSettings) -> Value {
         .cloned()
         .collect();
     if !direct_filtered.is_empty() {
+        // Android per-app routing, level 2 (in-tunnel): the matcher
+        // is `package_name` (resolved via the platform interface's
+        // FindConnectionOwner); on desktop it's `process_name`.
+        #[cfg(target_os = "android")]
+        rules.push(json!({
+            "package_name": direct_filtered,
+            "action": "route",
+            "outbound": "direct",
+        }));
+        #[cfg(not(target_os = "android"))]
         rules.push(json!({
             "process_name": direct_filtered,
             "action": "route",
@@ -431,6 +512,15 @@ fn build_route(settings: &GeneratorSettings) -> Value {
         }));
     }
     if !vpn_filtered.is_empty() {
+        #[cfg(target_os = "android")]
+        rules.push(json!({
+            "package_name": vpn_filtered,
+            "action": "route",
+            // Same selector-vs-urltest reasoning as the desktop
+            // variant below: pin to `proxy`, never `auto`.
+            "outbound": "proxy",
+        }));
+        #[cfg(not(target_os = "android"))]
         rules.push(json!({
             "process_name": vpn_filtered,
             "action": "route",
@@ -807,6 +897,18 @@ mod tests {
         for k in ["log", "dns", "inbounds", "outbounds", "route", "experimental"] {
             assert!(root.contains_key(k), "missing section: {k}");
         }
+    }
+
+    #[test]
+    fn uses_gvisor_tun_stack_on_android() {
+        assert_eq!(tun_stack(true), "gvisor");
+        assert_eq!(tun_stack(false), "system");
+    }
+
+    #[test]
+    fn uses_info_logging_after_android_protocol_verification() {
+        let cfg = Config::build(&fixture_outbounds(), &GeneratorSettings::default());
+        assert_eq!(cfg["log"]["level"], "info");
     }
 
     #[test]
