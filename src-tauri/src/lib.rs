@@ -59,11 +59,11 @@ pub fn run() {
                 let _ = win.set_focus();
             }
             // Stale-proxy guard: if a previous run of this app crashed while
-            // the system proxy was active, Windows would keep routing
-            // traffic to 127.0.0.1:<port> even though sing-box is dead.
-            // Clear it on startup so the user has working internet
-            // immediately, even before they hit "Connect".
-            #[cfg(windows)]
+            // the system proxy was active, the OS could keep routing traffic
+            // to 127.0.0.1:<port> even though sing-box is dead. Clear the
+            // proxy modes this app manages on startup so connectivity is
+            // restored before the user hits "Connect".
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 use crate::process::clear_system_proxy;
                 if let Err(e) = clear_system_proxy() {

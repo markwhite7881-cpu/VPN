@@ -543,14 +543,9 @@ fn current_target_triple() -> &'static str {
 
 
 
-// --- System proxy management (Windows only) -----------------------
-// When sing-box is in system_proxy mode we have to also tell Windows
-// to send HTTP/HTTPS traffic through 127.0.0.1:<port>. Without this,
-// the browser etc. go straight to the internet and the proxy has
-// nothing to forward.
-//
-// We use the WinINET registry keys under HKCU and broadcast a
-// WM_SETTINGCHANGE so most apps pick it up immediately.
+// --- System proxy management ---------------------------------------
+// Windows uses WinINET registry keys, Linux uses desktop-environment
+// commands, and macOS uses `networksetup` per active network service.
 
 #[cfg(windows)]
 pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
@@ -592,7 +587,7 @@ pub fn clear_system_proxy() -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
     // On Linux the system proxy is per-desktop-environment. We use
     // gsettings (GNOME, MATE, Cinnamon, XFCE) and fall back to
@@ -673,7 +668,7 @@ pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 pub fn clear_system_proxy() -> AppResult<()> {
     // Reverse of apply_system_proxy: revert gsettings to 'none' and
     // kwriteconfig5 to ProxyType=0. Best-effort, same caveats.
@@ -699,6 +694,102 @@ pub fn clear_system_proxy() -> AppResult<()> {
         "clear_system_proxy: no gsettings and no kwriteconfig5 on this \
          system — nothing to clear."
     );
+    Ok(())
+}
+
+// --- System proxy management (macOS) --------------------------------
+//
+// macOS exposes system proxies through `networksetup`. Apply the HTTP and
+// HTTPS proxy to every enabled network service because the active interface
+// can change between Wi-Fi, Ethernet, and other services while the app runs.
+// Per-service failures are expected (for example, inactive bridge services),
+// so they are logged and do not prevent other services from being updated.
+
+#[cfg(target_os = "macos")]
+fn enabled_network_services() -> Vec<String> {
+    let output = match std::process::Command::new("networksetup")
+        .arg("-listallnetworkservices")
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) => {
+            log::warn!(
+                "macos-proxy: networksetup -listallnetworkservices failed to spawn: {error}"
+            );
+            return Vec::new();
+        }
+    };
+    if !output.status.success() {
+        log::warn!(
+            "macos-proxy: networksetup -listallnetworkservices exited with {:?}",
+            output.status.code()
+        );
+        return Vec::new();
+    }
+
+    // The first line is the disabled-service legend; disabled services begin
+    // with `*`. Preserve full service names because they may contain spaces.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1)
+        .filter(|line| !line.starts_with('*') && !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn run_networksetup(args: &[&str]) {
+    match std::process::Command::new("networksetup").args(args).output() {
+        Ok(output) if !output.status.success() => {
+            log::warn!(
+                "macos-proxy: networksetup {} exited {:?}: {}",
+                args.join(" "),
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            log::warn!(
+                "macos-proxy: networksetup {} failed to spawn: {error}",
+                args.join(" ")
+            );
+        }
+        Ok(_) => {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
+    let services = enabled_network_services();
+    if services.is_empty() {
+        return Err(AppError::Spawn(
+            "no enabled network services (networksetup returned empty)".into(),
+        ));
+    }
+
+    let port = port.to_string();
+    for service in &services {
+        log::info!("macos-proxy: applying to {service}");
+        run_networksetup(&["-setwebproxy", service.as_str(), host, port.as_str()]);
+        run_networksetup(&[
+            "-setsecurewebproxy",
+            service.as_str(),
+            host,
+            port.as_str(),
+        ]);
+        run_networksetup(&["-setwebproxystate", service.as_str(), "on"]);
+        run_networksetup(&["-setsecurewebproxystate", service.as_str(), "on"]);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn clear_system_proxy() -> AppResult<()> {
+    for service in enabled_network_services() {
+        log::info!("macos-proxy: clearing on {service}");
+        run_networksetup(&["-setwebproxystate", service.as_str(), "off"]);
+        run_networksetup(&["-setsecurewebproxystate", service.as_str(), "off"]);
+    }
     Ok(())
 }
 
