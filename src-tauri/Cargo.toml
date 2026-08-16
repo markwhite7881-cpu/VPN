@@ -111,3 +111,7 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Keep this crate self-contained when it is checked out below a directory
+# that happens to contain another Cargo.toml.
+[workspace]
