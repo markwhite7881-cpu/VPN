@@ -882,31 +882,112 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
 
 #[cfg(target_os = "linux")]
 fn has_required_tun_capabilities(getcap_output: &str) -> bool {
-    getcap_output.lines().any(|line| {
-        // `getcap` emits `<path> <capability-assignment>`. Paths with
-        // whitespace are escaped by getcap; unescaped whitespace or extra
-        // fields are ambiguous, so fail closed rather than inspect the path.
-        let mut fields = line.split_whitespace();
-        let Some(_path) = fields.next() else {
-            return false;
-        };
-        let Some(assignment) = fields.next() else {
-            return false;
-        };
-        if fields.next().is_some() {
+    // `getcap <path>` emits at most one record for the supplied binary. Reject
+    // anything other than exactly one nonempty record, so a valid-looking line
+    // cannot mask malformed or ambiguous extra output.
+    let mut lines = getcap_output.lines().filter(|line| !line.trim().is_empty());
+    let Some(line) = lines.next() else {
+        return false;
+    };
+    if lines.next().is_some() {
+        return false;
+    }
+
+    // `getcap` emits `<path> <capability-assignment>`. Paths with whitespace
+    // are escaped by getcap; unescaped whitespace or extra fields are
+    // ambiguous, so fail closed without treating the path as capability input.
+    let mut fields = line.split_whitespace();
+    let Some(_path) = fields.next() else {
+        return false;
+    };
+    let Some(assignment) = fields.next() else {
+        return false;
+    };
+    if fields.next().is_some() {
+        return false;
+    }
+
+    // A libcap text assignment has one `=` followed by a nonempty subset of
+    // `eip`. Keep accepting additional valid capabilities, but reject unknown,
+    // empty, repeated, or otherwise malformed tokens.
+    if assignment.matches('=').count() != 1 {
+        return false;
+    }
+    let Some((capabilities, flags)) = assignment.split_once('=') else {
+        return false;
+    };
+    if capabilities.is_empty()
+        || flags.is_empty()
+        || !flags.contains('e')
+        || !flags.chars().all(|flag| matches!(flag, 'e' | 'i' | 'p'))
+        || !flags
+            .chars()
+            .all(|flag| flags.matches(flag).count() == 1)
+    {
+        return false;
+    }
+
+    let mut has_net_admin = false;
+    let mut has_net_raw = false;
+    for capability in capabilities.split(',') {
+        if !is_linux_capability_name(capability) {
             return false;
         }
-        let Some((capabilities, flags)) = assignment.split_once('=') else {
-            return false;
-        };
-        let has_net_admin = capabilities
-            .split(',')
-            .any(|capability| capability == "cap_net_admin");
-        let has_net_raw = capabilities
-            .split(',')
-            .any(|capability| capability == "cap_net_raw");
-        has_net_admin && has_net_raw && flags.contains('e')
-    })
+        match capability {
+            "cap_net_admin" => has_net_admin = true,
+            "cap_net_raw" => has_net_raw = true,
+            _ => {}
+        }
+    }
+    has_net_admin && has_net_raw
+}
+
+#[cfg(target_os = "linux")]
+fn is_linux_capability_name(capability: &str) -> bool {
+    matches!(
+        capability,
+        "cap_chown"
+            | "cap_dac_override"
+            | "cap_dac_read_search"
+            | "cap_fowner"
+            | "cap_fsetid"
+            | "cap_kill"
+            | "cap_setgid"
+            | "cap_setuid"
+            | "cap_setpcap"
+            | "cap_linux_immutable"
+            | "cap_net_bind_service"
+            | "cap_net_broadcast"
+            | "cap_net_admin"
+            | "cap_net_raw"
+            | "cap_ipc_lock"
+            | "cap_ipc_owner"
+            | "cap_sys_module"
+            | "cap_sys_rawio"
+            | "cap_sys_chroot"
+            | "cap_sys_ptrace"
+            | "cap_sys_pacct"
+            | "cap_sys_admin"
+            | "cap_sys_boot"
+            | "cap_sys_nice"
+            | "cap_sys_resource"
+            | "cap_sys_time"
+            | "cap_sys_tty_config"
+            | "cap_mknod"
+            | "cap_lease"
+            | "cap_audit_write"
+            | "cap_audit_control"
+            | "cap_setfcap"
+            | "cap_mac_override"
+            | "cap_mac_admin"
+            | "cap_syslog"
+            | "cap_wake_alarm"
+            | "cap_block_suspend"
+            | "cap_audit_read"
+            | "cap_perfmon"
+            | "cap_bpf"
+            | "cap_checkpoint_restore"
+    )
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -914,10 +995,17 @@ mod tun_capability_tests {
     use super::has_required_tun_capabilities;
 
     #[test]
-    fn requires_both_tun_capabilities() {
+    fn accepts_a_well_formed_effective_tun_capability_assignment() {
         assert!(has_required_tun_capabilities(
             "/usr/bin/sing-box cap_net_admin,cap_net_raw=ep"
         ));
+        assert!(has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_chown,cap_net_admin,cap_net_raw=eip"
+        ));
+    }
+
+    #[test]
+    fn rejects_incomplete_or_path_derived_capabilities() {
         assert!(!has_required_tun_capabilities(
             "/usr/bin/sing-box cap_net_admin=ep"
         ));
@@ -929,6 +1017,22 @@ mod tun_capability_tests {
         ));
         assert!(!has_required_tun_capabilities(
             "/tmp/cap_net_admin-cap_net_raw/sing-box =ep"
+        ));
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_malformed_getcap_output() {
+        assert!(!has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_admin,cap_net_raw=ep\n/usr/bin/other malformed"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_admin,cap_net_raw=e=garbage"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_admin,cap_net_raw=ez"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_admin,,cap_net_raw=ep"
         ));
     }
 }
