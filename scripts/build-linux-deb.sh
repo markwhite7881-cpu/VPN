@@ -77,14 +77,13 @@ chmod 0755 "$WORK/extracted/DEBIAN/postinst"
 dpkg-deb -b "$WORK/extracted" "$DEB_SRC"
 echo "==> injected postinst into $DEB_SRC"
 
-# 4) Copy back to the Windows-side dist-release so the CI /
-#    release tooling (and the user) can find the artifact
-#    alongside the Windows installers.
-WINDOWS_DEST="/mnt/c/Users/Алексей/.minimax-agent/projects/singbox-client/dist-release/Cloakwire_${VERSION}_amd64.deb"
-if [ -d "/mnt/c/Users/Алексей/.minimax-agent" ]; then
-    cp "$DEB_SRC" "$WINDOWS_DEST"
-    echo "==> copied to $WINDOWS_DEST"
-fi
+# 4) Copy the result back to this checkout's dist-release so the CI /
+#    release tooling (and the user) can find the artifact alongside the
+#    Windows installers.
+WINDOWS_DEST="$PROJECT_ROOT/dist-release/Cloakwire_${VERSION}_amd64.deb"
+mkdir -p "$PROJECT_ROOT/dist-release"
+cp "$DEB_SRC" "$WINDOWS_DEST"
+echo "==> copied to $WINDOWS_DEST"
 
 # 5) Sanity-check the result: confirm the postinst is present
 #    and references setcap. If either check fails, abort loudly.

@@ -1,149 +1,109 @@
 ﻿# Cloakwire: восстановление sing-box.exe рядом с cloakwire.exe
-#
-# Симптом: при запуске Cloakwire получаем ошибку
-#   binary_not_found: failed to locate sing-box binary:
-#   expected one of sing-box-x86_64-pc-windows-msvc.exe, sing-box.exe
-#
-# Почти всегда это значит, что `sing-box.exe` (52 МБ) был удалён
-# антивирусом — у VPN-тулзов это типичный false positive. Вторая
-# частая причина — друг установил Cloakwire не через NSIS, а
-# из portable-архива, где sing-box.exe нужно класть руками.
-#
-# Скрипт:
-#   1. Находит, где установлен Cloakwire
-#   2. Проверяет, есть ли sing-box рядом
-#   3. Если нет — качает с GitHub Releases и кладёт рядом
-#   4. Печатает инструкцию как добавить папку в исключения
+# Загрузка выполняется только с официальных HTTPS GitHub API/release endpoints.
+$ErrorActionPreference = 'Stop'
 
-$ErrorActionPreference = "Stop"
+$SingboxRepository = 'SagerNet/sing-box'
+$GitHubApiBase = "https://api.github.com/repos/$SingboxRepository"
 
-# --- helpers -------------------------------------------------------------
-
-function Write-Section {
-    param([string]$Title)
-    Write-Host ""
-    Write-Host "=== $Title ===" -ForegroundColor Cyan
-}
+function Write-Section { param([string]$Title); Write-Host "`n=== $Title ===" -ForegroundColor Cyan }
 
 function Find-CloakwireInstall {
-    # Standard NSIS install path (v1.0.0+ identifier ru.classquiz.singbox).
     $candidates = @(
-        Join-Path $env:LOCALAPPDATA "Cloakwire"
-        # Older releases (v1.0.0 used "Singbox Client" as productName but
-        # the same identifier, so the AppData dir was already Cloakwire.
-        # Pre-v1.0.0 used a different identifier and a different dir.
-        "C:\Program Files\Cloakwire"
-        "C:\Program Files (x86)\Cloakwire"
+        (Join-Path $env:LOCALAPPDATA 'Cloakwire'),
+        'C:\Program Files\Cloakwire',
+        'C:\Program Files (x86)\Cloakwire'
     )
     foreach ($dir in $candidates) {
-        $exe = Join-Path $dir "cloakwire.exe"
-        if (Test-Path $exe) { return $dir }
+        if (Test-Path (Join-Path $dir 'cloakwire.exe')) { return $dir }
     }
     return $null
 }
 
-function Get-SingboxUrl {
-    # The same v1.0.3 NSIS installer also packages sing-box.exe.
-    # We grab it from the latest release so the SHA matches the
-    # locally-installed cloakwire.exe.
-    # (Sing-box binaries are stable across versions; the SFA client
-    # is what changes. We're not embedding SFA here — we just want
-    # the sing-box sidecar from the GitHub Release asset.)
-    # The asset name in the latest release is "Cloakwire_1.0.3_x64-setup.exe",
-    # which is a NSIS installer — but we want just sing-box.exe.
-    # Fortunately, sing-box is also published upstream on the SagerNet
-    # sing-box repo as a separate binary. We pin to the same version
-    # (1.14.0-lx.24) that's in our v1.0.3 local install (Cloakwire
-    # bundles 1.14.0; v1.0.2 used 1.14.0-lx.24 too).
-    return "https://github.com/SagerNet/sing-box/releases/download/v1.14.0/sing-box-1.14.0-windows-amd64.zip"
+function Get-GitHubJson {
+    param([string]$Uri)
+    if ($Uri -notmatch '^https://api\.github\.com/repos/SagerNet/sing-box/') {
+        throw "Refusing non-official GitHub API URL: $Uri"
+    }
+    return Invoke-RestMethod -Uri $Uri -Headers @{ 'User-Agent' = 'Cloakwire-recovery' } -UseBasicParsing
 }
 
-# --- main ----------------------------------------------------------------
+function Get-OfficialAssetText {
+    param([string]$Uri)
+    if ($Uri -notmatch '^https://github\.com/SagerNet/sing-box/releases/download/') {
+        throw "Refusing non-official GitHub release URL: $Uri"
+    }
+    return (Invoke-WebRequest -Uri $Uri -Headers @{ 'User-Agent' = 'Cloakwire-recovery' } -UseBasicParsing).Content
+}
 
-Write-Section "Cloakwire: проверка sing-box.exe"
+function Get-AssetDownload {
+    param([object]$Asset, [string]$Destination)
+    if ($Asset.browser_download_url -notmatch '^https://github\.com/SagerNet/sing-box/releases/download/') {
+        throw "Release asset URL is not an official HTTPS GitHub URL"
+    }
+    Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $Destination -Headers @{ 'User-Agent' = 'Cloakwire-recovery' } -UseBasicParsing
+}
 
+function Get-ChecksumForAsset {
+    param([string]$Text, [string]$AssetName)
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^\s*([0-9A-Fa-f]{64})\s+\*?(.+?)\s*$' -and $Matches[2] -eq $AssetName) {
+            return $Matches[1].ToLowerInvariant()
+        }
+    }
+    throw "Official checksum file has no SHA-256 entry for $AssetName"
+}
+
+function Get-ExpectedExecutable {
+    param([string]$Root)
+    $matches = @(Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq 'sing-box-windows-amd64.exe' -or $_.Name -eq 'sing-box.exe' })
+    if ($matches.Count -ne 1) { throw "Archive must contain exactly one expected Windows executable" }
+    return $matches[0]
+}
+
+Write-Section 'Cloakwire: проверка sing-box.exe'
 $installDir = Find-CloakwireInstall
-if (-not $installDir) {
-    Write-Host "Не нашёл установленный Cloakwire." -ForegroundColor Red
-    Write-Host "Проверь вручную: ищи `cloakwire.exe` в Проводнике, или в %LOCALAPPDATA%\Cloakwire" -ForegroundColor Yellow
-    exit 1
-}
+if (-not $installDir) { Write-Host 'Не нашёл установленный Cloakwire.' -ForegroundColor Red; exit 1 }
+$singboxPath = Join-Path $installDir 'sing-box.exe'
+$singboxLongPath = Join-Path $installDir 'sing-box-x86_64-pc-windows-msvc.exe'
+if ((Test-Path $singboxPath) -or (Test-Path $singboxLongPath)) { Write-Host 'OK: sing-box уже на месте' -ForegroundColor Green; exit 0 }
 
-Write-Host "Cloakwire установлен в: $installDir" -ForegroundColor Green
-
-$singboxPath = Join-Path $installDir "sing-box.exe"
-$singboxLongPath = Join-Path $installDir "sing-box-x86_64-pc-windows-msvc.exe"
-$longExists = Test-Path $singboxLongPath
-
-if ((Test-Path $singboxPath) -or $longExists) {
-    Write-Host "OK: sing-box уже на месте" -ForegroundColor Green
-    if (Test-Path $singboxPath) {
-        $size = (Get-Item $singboxPath).Length
-        Write-Host "  $singboxPath ($([math]::Round($size/1MB,1)) MB)"
-    }
-    if ($longExists) {
-        $size = (Get-Item $singboxLongPath).Length
-        Write-Host "  $singboxLongPath ($([math]::Round($size/1MB,1)) MB)"
-    }
-    exit 0
-}
-
-Write-Host "sing-box.exe не найден — качаю с sing-box Releases..." -ForegroundColor Yellow
-
-$url = Get-SingboxUrl
-$zip = Join-Path $env:TEMP "sing-box.zip"
-Write-Host "  $url"
-
+$tempRoot = Join-Path $env:TEMP ("cloakwire-singbox-recovery-" + [guid]::NewGuid().ToString('N'))
+$zip = Join-Path $tempRoot 'sing-box.zip'
+$extract = Join-Path $tempRoot 'extract'
+New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 try {
-    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+    $release = Get-GitHubJson "$GitHubApiBase/releases/latest"
+    if ($release.tag_name -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "Unexpected official release tag: $($release.tag_name)" }
+    $asset = @($release.assets | Where-Object { $_.name -match '^sing-box-[0-9]+\.[0-9]+\.[0-9]+-windows-amd64\.zip$' })
+    $checksumAsset = @($release.assets | Where-Object { $_.name -in @('SHA256SUMS.txt', 'sha256sums.txt', 'checksums.txt') })
+    if ($asset.Count -ne 1 -or $checksumAsset.Count -gt 1) { throw 'Official release must provide one Windows amd64 archive and at most one checksum asset' }
+    $assetName = $asset[0].name
+    if ($checksumAsset.Count -eq 1) {
+        $expectedHash = Get-ChecksumForAsset (Get-OfficialAssetText $checksumAsset[0].browser_download_url) $assetName
+    } elseif ($asset[0].digest -match '^sha256:([0-9A-Fa-f]{64})$') {
+        $expectedHash = $Matches[1].ToLowerInvariant()
+    } else {
+        throw "Official release metadata has no SHA-256 checksum for $assetName"
+    }
+    Get-AssetDownload $asset[0] $zip
+    $actualHash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $expectedHash) { throw "SHA-256 mismatch for $assetName (expected $expectedHash, got $actualHash)" }
+    Expand-Archive -Path $zip -DestinationPath $extract -Force
+    $extracted = Get-ExpectedExecutable $extract
+    $versionOutput = (& $extracted.FullName version 2>&1 | Out-String)
+    $releaseVersion = $release.tag_name.Substring(1)
+    if ($versionOutput -notmatch [regex]::Escape($releaseVersion)) { throw "Downloaded executable version does not match official release $($release.tag_name)" }
+    Copy-Item -LiteralPath $extracted.FullName -Destination $singboxPath -Force
+    Write-Host "Скопировал проверенный $assetName ($actualHash) в: $singboxPath" -ForegroundColor Green
 } catch {
-    Write-Host "Не удалось скачать: $_" -ForegroundColor Red
-    Write-Host "Скачай руками: $url" -ForegroundColor Yellow
-    Write-Host "  1. Скачай sing-box-1.14.0-windows-amd64.zip"
-    Write-Host "  2. Распакуй (внутри sing-box-windows-amd64.exe)"
-    Write-Host "  3. Переименуй в sing-box.exe"
-    Write-Host "  4. Положи в $installDir"
+    Write-Host "Восстановление остановлено: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host 'Установленный бинарник не изменён.' -ForegroundColor Yellow
     exit 1
+} finally {
+    if (Test-Path $tempRoot) { Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# Extract. The upstream zip contains `sing-box-windows-amd64.exe` directly.
-$tmp = Join-Path $env:TEMP "sing-box-extract"
-if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
-Expand-Archive -Path $zip -DestinationPath $tmp -Force
-
-$extracted = Get-ChildItem -Path $tmp -Recurse -Filter "sing-box-windows-amd64.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $extracted) {
-    $extracted = Get-ChildItem -Path $tmp -Recurse -Filter "sing-box.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-}
-if (-not $extracted) {
-    Write-Host "В архиве не нашёл sing-box-*.exe — посмотри в $tmp вручную" -ForegroundColor Red
-    exit 1
-}
-
-Copy-Item $extracted.FullName -Destination $singboxPath -Force
-Write-Host "Скопировал в: $singboxPath" -ForegroundColor Green
-Write-Host "  size: $([math]::Round((Get-Item $singboxPath).Length / 1MB, 1)) MB"
-
-Remove-Item $zip -Force
-Remove-Item $tmp -Recurse -Force
-
-Write-Section "Следующий шаг: исключение в антивирусе"
-
-Write-Host "Если через 5 минут sing-box.exe снова пропадает — это антивирус."
-Write-Host ""
-Write-Host "Как добавить папку в исключения:"
-Write-Host ""
-Write-Host "  Windows Defender:"
-Write-Host "    Settings > Privacy & Security > Windows Security > Virus & threat protection"
-Write-Host "    > Virus & threat protection settings > Exclusions > Add or remove exclusions"
-Write-Host "    > Add folder > $installDir"
-Write-Host ""
-Write-Host "  Kaspersky / ESET / Avast / DrWeb: см. документацию антивируса."
-Write-Host ""
-Write-Host "  Если sing-box.exe не удаляется, но Cloakwire всё равно не видит его —"
-Write-Host "  закрой Cloakwire полностью (иконка в трее > Quit), удали sing-box.exe"
-Write-Host "  из карантина антивируса, запусти Cloakwire заново — он пересоздаст процесс"
-Write-Host "  и антивирус, возможно, перестанет его блокировать."
-
-Write-Section "Готово"
-Write-Host "Запусти Cloakwire заново. Если ошибка повторяется — это антивирус." -ForegroundColor Green
+Write-Section 'Следующий шаг: исключение в антивирусе'
+Write-Host "Если sing-box.exe снова пропадает, добавьте папку $installDir в исключения антивируса."
+Write-Host 'Готово. Запусти Cloakwire заново.' -ForegroundColor Green

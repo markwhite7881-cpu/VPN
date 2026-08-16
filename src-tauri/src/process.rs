@@ -837,35 +837,38 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
     //    standard on Ubuntu desktop). If it's not installed, fail
     //    soft — sing-box itself will produce a clearer EPERM error
     //    when it tries to open /dev/net/tun.
-    let output = std::process::Command::new("getcap")
+    let output = match std::process::Command::new("getcap")
         .arg(binary)
         .output()
-        .map_err(|e| {
-            format!(
-                "could not run `getcap` to verify TUN capabilities (is `libcap2-bin` installed?): {e}"
-            )
-        })?;
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            log::warn!("`getcap` is unavailable; skipping TUN capability preflight");
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(format!(
+                "could not run `getcap` to verify TUN capabilities: {error}"
+            ));
+        }
+    };
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // 3) `getcap` output looks like:
     //       /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
-    //    We accept any line that mentions cap_net_admin — the
-    //    additional cap_net_raw is what TUN actually needs but
-    //    is almost always bundled together; surfacing a separate
-    //    error for "only cap_net_admin is set" would be
-    //    over-engineering for a one-line check.
-    if stdout.contains("cap_net_admin") {
+    //    TUN requires both capabilities; a partial report must be rejected.
+    if output.status.success() && has_required_tun_capabilities(&stdout) {
         log::info!(
-            "sing-box {} has cap_net_admin — TUN mode is ready",
+            "sing-box {} has cap_net_admin and cap_net_raw — TUN mode is ready",
             binary.display()
         );
         return Ok(());
     }
 
     Err(format!(
-        "TUN mode needs CAP_NET_ADMIN (and CAP_NET_RAW) on the sing-box binary, but \
-         `{}` doesn't have them. Reinstall the .deb (its postinst applies these caps \
+        "TUN mode needs CAP_NET_ADMIN and CAP_NET_RAW on the sing-box binary, but \
+         `{}` doesn't have both. Reinstall the .deb (its postinst applies these caps \
          automatically) or run manually:\n  \
          sudo setcap cap_net_admin,cap_net_raw=+ep {}\n  \
          getcap stdout: {}\n  \
@@ -876,6 +879,60 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
         stderr.trim(),
     ))
 }
+
+#[cfg(target_os = "linux")]
+fn has_required_tun_capabilities(getcap_output: &str) -> bool {
+    getcap_output.lines().any(|line| {
+        // `getcap` emits `<path> <capability-assignment>`. Paths with
+        // whitespace are escaped by getcap; unescaped whitespace or extra
+        // fields are ambiguous, so fail closed rather than inspect the path.
+        let mut fields = line.split_whitespace();
+        let Some(_path) = fields.next() else {
+            return false;
+        };
+        let Some(assignment) = fields.next() else {
+            return false;
+        };
+        if fields.next().is_some() {
+            return false;
+        }
+        let Some((capabilities, flags)) = assignment.split_once('=') else {
+            return false;
+        };
+        let has_net_admin = capabilities
+            .split(',')
+            .any(|capability| capability == "cap_net_admin");
+        let has_net_raw = capabilities
+            .split(',')
+            .any(|capability| capability == "cap_net_raw");
+        has_net_admin && has_net_raw && flags.contains('e')
+    })
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tun_capability_tests {
+    use super::has_required_tun_capabilities;
+
+    #[test]
+    fn requires_both_tun_capabilities() {
+        assert!(has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_admin,cap_net_raw=ep"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_admin=ep"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/usr/bin/sing-box cap_net_raw=ep"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/tmp/cap_net_admin,cap_net_raw=ep =ep"
+        ));
+        assert!(!has_required_tun_capabilities(
+            "/tmp/cap_net_admin-cap_net_raw/sing-box =ep"
+        ));
+    }
+}
+
 
 #[cfg(not(target_os = "linux"))]
 async fn check_tun_capabilities(_binary: &Path, _config_path: &Path) -> Result<(), String> {
