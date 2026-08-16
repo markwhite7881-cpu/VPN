@@ -18,6 +18,7 @@ import { latencyToBars, useServerLatency } from "@/hooks/useServerLatency";
 import { cn } from "@/lib/utils";
 import { flagForProfile } from "@/lib/flags";
 import { profileLabel, profileEndpoint, isSupported } from "@/lib/outbound";
+import { isValidProfileSelection } from "@/lib/profileSelection";
 import type { Outbound, Status, StatusReport } from "@/lib/types";
 
 const inTauri =
@@ -89,7 +90,7 @@ export function HomeTab({
   // point at a missing server.
   useEffect(() => {
     if (profiles.length === 0 && selectedIndex !== -1) onSelect(-1);
-    else if (profiles.length > 0 && (selectedIndex < 0 || selectedIndex >= profiles.length))
+    else if (profiles.length > 0 && !isValidProfileSelection(selectedIndex, profiles.length))
       onSelect(0);
   }, [profiles.length, selectedIndex, onSelect]);
 
