@@ -57,8 +57,8 @@ pub async fn check_singbox_update(app: &AppHandle) -> AppResult<SingboxUpdateInf
     let release = fetch_latest_release().await?;
     let latest = normalize_version(&release.tag_name);
     let asset = match current_platform().and_then(|platform| select_archive(&release.assets, &latest, platform)) {
-        Ok(asset) => asset,
-        Err(_) => return Ok(SingboxUpdateInfo::not_available(current, latest)),
+        Ok(asset) if asset_sha256_digest(asset).is_ok() => asset,
+        _ => return Ok(SingboxUpdateInfo::not_available(current, latest)),
     };
     Ok(SingboxUpdateInfo {
         current_version: current.clone(),
@@ -75,13 +75,8 @@ pub async fn apply_singbox_update(app: AppHandle, expected_version: Option<Strin
     let release = fetch_latest_release().await?;
     let version = bind_expected_version(&normalize_version(&release.tag_name), expected_version)?;
     let archive = select_archive(&release.assets, &version, current_platform()?)?;
-    let checksum_asset = select_checksum_manifest(&release.assets)?;
+    let expected_hash = asset_sha256_digest(archive)?;
     let tag = release.tag_name.clone();
-
-    let checksum_bytes = download_release_asset(&checksum_asset, &tag).await?;
-    let checksum_text = std::str::from_utf8(&checksum_bytes)
-        .map_err(|_| AppError::Network("checksum manifest is not UTF-8".to_string()))?;
-    let expected_hash = checksum_for_archive(checksum_text, &archive.name)?;
 
     let dest = runtime_bin_path(&app)?;
     let runtime_dir = dest.parent().ok_or_else(|| AppError::Io(std::io::Error::new(std::io::ErrorKind::Other, "runtime path has no parent")))?;
@@ -190,7 +185,7 @@ async fn download_release_asset(asset: &GithubAsset, tag: &str) -> AppResult<Vec
 #[derive(Debug, Deserialize)]
 struct GithubRelease { tag_name: String, assets: Vec<GithubAsset> }
 #[derive(Debug, Clone, Deserialize)]
-struct GithubAsset { name: String, browser_download_url: String, size: u64 }
+struct GithubAsset { name: String, browser_download_url: String, size: u64, #[serde(default)] digest: Option<String> }
 
 #[derive(Debug, Clone, Copy)]
 enum Platform { WindowsX86_64 }
@@ -213,31 +208,13 @@ fn select_archive<'a>(assets: &'a [GithubAsset], version: &str, platform: Platfo
     }
 }
 
-fn select_checksum_manifest(assets: &[GithubAsset]) -> AppResult<&GithubAsset> {
-    let mut manifests = assets.iter().filter(|asset| {
-        let name = asset.name.to_ascii_lowercase();
-        name == "checksums.txt" || name == "sha256sums.txt" || name.ends_with(".sha256") || name.ends_with(".sha256sum")
-    });
-    match (manifests.next(), manifests.next()) {
-        (Some(asset), None) => Ok(asset),
-        _ => Err(AppError::Network("release must contain exactly one SHA-256 checksum manifest".to_string())),
+fn asset_sha256_digest(asset: &GithubAsset) -> AppResult<String> {
+    let digest = asset.digest.as_deref().ok_or_else(|| AppError::Network(format!("release has no SHA-256 digest for {}", asset.name)))?;
+    let hash = digest.strip_prefix("sha256:").ok_or_else(|| AppError::Network(format!("release has invalid digest algorithm for {}", asset.name)))?;
+    if !is_sha256(hash) {
+        return Err(AppError::Network(format!("release has malformed SHA-256 digest for {}", asset.name)));
     }
-}
-
-fn checksum_for_archive(manifest: &str, archive_name: &str) -> AppResult<String> {
-    let mut matching = Vec::new();
-    for line in manifest.lines().filter(|line| !line.trim().is_empty()) {
-        let (hash, filename) = line.split_once("  ").ok_or_else(|| AppError::Network("malformed SHA-256 manifest entry".to_string()))?;
-        if !is_sha256(hash) || filename.is_empty() || filename.starts_with('*') || filename.contains('/') || filename.contains('\\') {
-            return Err(AppError::Network("malformed SHA-256 manifest entry".to_string()));
-        }
-        if filename == archive_name { matching.push(hash.to_ascii_lowercase()); }
-    }
-    match matching.as_slice() {
-        [hash] => Ok(hash.clone()),
-        [] => Err(AppError::Network(format!("checksum manifest has no entry for {archive_name}"))),
-        _ => Err(AppError::Network(format!("checksum manifest has duplicate entries for {archive_name}"))),
-    }
+    Ok(hash.to_ascii_lowercase())
 }
 
 fn is_sha256(value: &str) -> bool { value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()) }
@@ -311,10 +288,15 @@ async fn probe_binary_version(binary: &Path) -> AppResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn asset(name: &str) -> GithubAsset { GithubAsset { name: name.to_string(), browser_download_url: format!("https://github.com/SagerNet/sing-box/releases/download/v1.2.3/{name}"), size: 1 } }
+    fn asset(name: &str) -> GithubAsset { GithubAsset { name: name.to_string(), browser_download_url: format!("https://github.com/SagerNet/sing-box/releases/download/v1.2.3/{name}"), size: 1, digest: None } }
     #[test] fn selects_only_exact_platform_archive() { let assets = vec![asset("sing-box-1.2.3-windows-amd64-cgo.zip"), asset("sing-box-1.2.3-windows-amd64.zip"), asset("sing-box-1.2.3-linux-amd64.tar.gz")]; assert_eq!(select_archive(&assets, "1.2.3", Platform::WindowsX86_64).unwrap().name, "sing-box-1.2.3-windows-amd64.zip"); }
-    #[test] fn rejects_release_without_checksum_for_selected_archive() { assert!(checksum_for_archive(&("a".repeat(64) + "  other.zip\n"), "target.zip").is_err()); }
-    #[test] fn rejects_checksum_mismatch_malformed_and_duplicate_entries() { assert!(checksum_for_archive("not-a-hash  target.zip\n", "target.zip").is_err()); let duplicate = format!("{}  target.zip\n{}  target.zip\n", "a".repeat(64), "b".repeat(64)); assert!(checksum_for_archive(&duplicate, "target.zip").is_err()); assert!(hashes_match(&"a".repeat(64), &"b".repeat(64)).is_err()); }
+    #[test] fn rejects_checksum_mismatch() { assert!(hashes_match(&"a".repeat(64), &"b".repeat(64)).is_err()); }
+    #[test] fn selects_only_strict_github_asset_sha256_digest() {
+        let archive = GithubAsset { name: "sing-box-1.2.3-windows-amd64.zip".to_string(), browser_download_url: "https://github.com/SagerNet/sing-box/releases/download/v1.2.3/sing-box-1.2.3-windows-amd64.zip".to_string(), size: 1, digest: Some(format!("sha256:{}", "a".repeat(64))) };
+        assert_eq!(asset_sha256_digest(&archive).unwrap(), "a".repeat(64));
+        let malformed = GithubAsset { digest: Some("sha512:abc".to_string()), ..archive.clone() };
+        assert!(asset_sha256_digest(&malformed).is_err());
+    }
     #[test] fn rejects_expected_version_mismatch() { assert!(bind_expected_version("1.2.3", Some("1.2.4".to_string())).is_err()); }
     #[test] fn accepts_only_github_release_download_routes() { assert!(is_trusted_download_url("https://github.com/SagerNet/sing-box/releases/download/v1.2.3/sing-box-1.2.3-windows-amd64.zip", "v1.2.3", "sing-box-1.2.3-windows-amd64.zip")); assert!(!is_trusted_download_url("https://example.com/SagerNet/sing-box/releases/download/v1.2.3/sing-box-1.2.3-windows-amd64.zip", "v1.2.3", "sing-box-1.2.3-windows-amd64.zip")); assert!(!is_trusted_download_url("https://github.com/SagerNet/sing-box/releases/download/v1.2.3/other.zip", "v1.2.3", "sing-box-1.2.3-windows-amd64.zip")); assert!(!is_trusted_redirect_url("https://example.com/evil", "v1.2.3", "sing-box-1.2.3-windows-amd64.zip")); }
 }
