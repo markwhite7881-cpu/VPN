@@ -1,162 +1,117 @@
-# Release helper for the Tauri updater.
+# Build and stage one signed Windows updater artifact.
 #
-# What this does:
-#   1. `npm run tauri build` — produces MSI + NSIS in
-#      src-tauri\target\release\bundle\
-#   2. `src-tauri\crates\tauri-signer\target\release\tauri-signer.exe`
-#      — signs each installer with the project's private key
-#      (src-tauri\.tauri-updater.key, NEVER commit this) and emits
-#      `.sig` sidecar files. We use our own signer because
-#      `npx tauri signer sign` hangs on Windows after
-#      "Signing without password." (TTY-detection bug in
-#      tauri-cli 2.x).
-#   3. Produces `latest.json` — the manifest the running app
-#      fetches from GitHub Releases to know there's a new version.
-#   4. Prints the `gh release create` command you'll need to
-#      upload the artifacts + latest.json to GitHub.
+# This script intentionally does not publish anything. It uses a unique Cargo
+# target directory, so the staged installer can only originate from this run.
 #
-# Usage (PowerShell):
-#   .\scripts\release.ps1 -Version 1.0.1
+# Usage:
+#   .\scripts\release.ps1 -Version 1.2.1
 #
-# The script does NOT push to GitHub — it stops just short of
-# that so you can review the manifest, then asks you to confirm.
-
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Version
+    [ValidatePattern('^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$')]
+    [string]$Version,
+
+    [string]$DistRoot,
+
+    [string]$BaseUrl = 'https://github.com/markwhite7881-cpu/cloakwire/releases/download'
 )
 
-$ErrorActionPreference = "Stop"
-
+$ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$BundleRoot = Join-Path $ProjectRoot "src-tauri\target\release\bundle"
-$KeyPath = Join-Path $ProjectRoot "src-tauri\.tauri-updater.key"
-$LatestPath = Join-Path $ProjectRoot "latest.json"
-$SignerExe = Join-Path $ProjectRoot "src-tauri\crates\tauri-signer\target\release\tauri-signer.exe"
-
-if (-not (Test-Path $SignerExe)) {
-    Write-Host "ERROR: tauri-signer.exe not found at $SignerExe" -ForegroundColor Red
-    Write-Host "Build it with: cd src-tauri/crates/tauri-signer && cargo build --release"
-    exit 1
+if ([string]::IsNullOrWhiteSpace($DistRoot)) {
+    $DistRoot = Join-Path $ProjectRoot 'release-staging'
 }
 
-if (-not (Test-Path $KeyPath)) {
-    Write-Host "ERROR: signing key not found at $KeyPath" -ForegroundColor Red
-    Write-Host "Generate one with: npx tauri signer generate -w $KeyPath"
-    exit 1
+$KeyPath = Join-Path $ProjectRoot 'src-tauri\.tauri-updater.key'
+$SignerExe = Join-Path $ProjectRoot 'src-tauri\crates\tauri-signer\target\release\tauri-signer.exe'
+$StagePath = Join-Path $DistRoot "v$Version"
+$ManifestPath = Join-Path $StagePath 'latest.json'
+$ManifestWriter = Join-Path $PSScriptRoot 'write-latest-json.ps1'
+$Validator = Join-Path $PSScriptRoot 'validate-release.ps1'
+$BuildTarget = Join-Path $DistRoot ('.build-v{0}-{1}' -f $Version, [Guid]::NewGuid().ToString('N'))
+$NsisDir = Join-Path $BuildTarget 'release\bundle\nsis'
+$ExpectedArtifactName = "Cloakwire_$Version`_x64-setup.exe"
+
+foreach ($required in @($SignerExe, $KeyPath, $ManifestWriter, $Validator)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+        throw "Required release input is missing: $required"
+    }
+}
+if (Test-Path -LiteralPath $StagePath) {
+    throw "Refusing to reuse existing staging directory: $StagePath"
 }
 
-# 1) Build installers. This is the long step (~3 min).
-# Make sure cargo / rustc are on PATH for the subprocess — tauri
-# shells out to `cargo metadata` and friends. We pull the path
-# from the standard install location if it's not already there.
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-    $cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
-    if (Test-Path $cargoBin) {
+    $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+    if (Test-Path -LiteralPath $cargoBin -PathType Container) {
         $env:PATH = "$cargoBin;$env:PATH"
     }
 }
 
-Write-Host "==> Building installers (this takes ~3 min)..." -ForegroundColor Cyan
-Push-Location $ProjectRoot
+New-Item -ItemType Directory -Path $BuildTarget | Out-Null
 try {
-    npm run tauri:build 2>&1 | Select-Object -Last 10
-} finally {
-    Pop-Location
-}
-
-$msiDir = Join-Path $BundleRoot "msi"
-$nsisDir = Join-Path $BundleRoot "nsis"
-
-if (-not (Test-Path $msiDir) -and -not (Test-Path $nsisDir)) {
-    Write-Host "ERROR: no bundle output at $BundleRoot" -ForegroundColor Red
-    exit 1
-}
-
-# 2) Sign every installer and collect {url, signature} pairs.
-# Tauri 2 manifest format: { version, notes, pub_date, platforms: { "windows-x86_64": { url, signature } } }.
-$signatures = @{}
-$artifacts = @()
-
-$items = @()
-if (Test-Path $msiDir)  { $items += Get-ChildItem $msiDir  -Filter "*.msi" }
-if (Test-Path $nsisDir) { $items += Get-ChildItem $nsisDir -Filter "*.exe" }
-
-foreach ($item in $items) {
-    $filePath = $item.FullName
-    Write-Host "    signing $filePath..." -ForegroundColor DarkCyan
-    # Our local tauri-signer writes `<file>.sig` next to the file
-    # in the standard 4-line minisign format (no password prompt —
-    # the tauri-generated key file uses KDF with empty passphrase,
-    # and the tauri-signer binary passes `Some("")` accordingly).
-    & $SignerExe -k $KeyPath $filePath 2>&1 | Select-Object -Last 3
-    $sigPath = "$filePath.sig"
-    if (-not (Test-Path $sigPath)) {
-        Write-Host "ERROR: signature file not produced for $filePath" -ForegroundColor Red
-        exit 1
+    Push-Location $ProjectRoot
+    try {
+        $env:CARGO_TARGET_DIR = $BuildTarget
+        npm run tauri:build 2>&1 | Select-Object -Last 20
+        $buildExit = $LASTEXITCODE
+        if ($buildExit -ne 0) {
+            throw "tauri build failed with exit code $buildExit"
+        }
+    } finally {
+        Remove-Item Env:CARGO_TARGET_DIR -ErrorAction SilentlyContinue
+        Pop-Location
     }
-    # The manifest's `signature` field is `base64(<.sig file content>)`,
-    # not `base64(<inner 64-byte Ed25519 sig>)` and not
-    # `base64(<74-byte minisign sig blob>)`. tauri-plugin-updater's
-    # `verify_signature` base64-decodes the field back to a string
-    # and hands it to `minisign_verify::Signature::decode`, which
-    # expects the full multi-line .sig file content. This is the
-    # same encoding `npx tauri signer sign` produces (see
-    # tauri-cli/src/signer/sign.rs: `base64::encode(sig.to_string())`).
-    $sigText = (Get-Content $sigPath -Raw -Encoding UTF8)
-    $utf8 = [Text.UTF8Encoding]::new($false)
-    $sigB64 = [Convert]::ToBase64String($utf8.GetBytes($sigText))
-    $fileName = [System.IO.Path]::GetFileName($filePath)
-    $url = "https://github.com/markwhite7881-cpu/cloakwire/releases/download/v$Version/$fileName"
-    $signatures["windows-x86_64"] = @{ url = $url; signature = $sigB64 }
-    $artifacts += $filePath
+
+    $sourcePath = Join-Path $NsisDir $ExpectedArtifactName
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "Fresh build did not produce expected NSIS installer: $sourcePath"
+    }
+    $unexpectedInstallers = @(Get-ChildItem -LiteralPath $NsisDir -File -Filter '*.exe')
+    if ($unexpectedInstallers.Count -ne 1) {
+        throw "Fresh build produced $($unexpectedInstallers.Count) NSIS installers; expected exactly one."
+    }
+
+    New-Item -ItemType Directory -Path $StagePath | Out-Null
+    $artifactPath = Join-Path $StagePath $ExpectedArtifactName
+    Copy-Item -LiteralPath $sourcePath -Destination $artifactPath -ErrorAction Stop
+
+    & $SignerExe -k $KeyPath $artifactPath 2>&1 | Select-Object -Last 10
+    $signExit = $LASTEXITCODE
+    if ($signExit -ne 0) {
+        throw "Updater signer failed with exit code $signExit"
+    }
+
+    $signaturePath = "$artifactPath.sig"
+    if (-not (Test-Path -LiteralPath $signaturePath -PathType Leaf)) {
+        throw "Updater signature was not created: $signaturePath"
+    }
+
+    $tagBaseUrl = "$($BaseUrl.TrimEnd('/'))/v$Version"
+    & $ManifestWriter `
+        -Version $Version `
+        -DistPath $StagePath `
+        -ArtifactName $ExpectedArtifactName `
+        -Platform 'windows-x86_64' `
+        -BaseUrl $tagBaseUrl `
+        -SignaturePath $signaturePath `
+        -OutputPath $ManifestPath
+
+    & $Validator `
+        -ManifestPath $ManifestPath `
+        -DistPath $StagePath `
+        -Version $Version `
+        -RequiredPlatforms 'windows-x86_64'
+
+    Write-Host ''
+    Write-Host '==> Staged and validated. Review before publishing:' -ForegroundColor Green
+    Get-ChildItem -LiteralPath $StagePath -File | ForEach-Object { Write-Host "    $($_.FullName)" -ForegroundColor Green }
+    Write-Host ''
+    Write-Host "  gh release create v$Version `"$artifactPath`" `"$signaturePath`" `"$ManifestPath`" --title `"v$Version`" --generate-notes" -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '==> This script does not publish the release.' -ForegroundColor Magenta
+} finally {
+    if (Test-Path -LiteralPath $BuildTarget) {
+        Remove-Item -LiteralPath $BuildTarget -Recurse -Force
+    }
 }
-
-# 3) Compose latest.json. Use a here-string + simple replacement to
-# avoid the JSON-building-in-PowerShell traps (ConvertTo-Json adds
-# a BOM on PS 5.1, and string interpolation is finicky).
-$platformsJson = ($signatures.GetEnumerator() | ForEach-Object {
-    $key = $_.Key
-    $obj = $_.Value
-    # `ConvertTo-Json -Compress` on a single object is fine.
-    $inner = $obj | ConvertTo-Json -Compress
-    "`"$key`": $inner"
-}) -join ", "
-
-$pubDate = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-$manifest = @"
-{
-  "version": "$Version",
-  "notes": "Release v$Version — see the GitHub release notes for the full changelog.",
-  "pub_date": "$pubDate",
-  "platforms": {
-    $platformsJson
-  }
-}
-"@
-
-# Write WITHOUT BOM. PS 5.1's Out-File adds UTF-8 BOM by default
-# which Tauri's manifest parser can't handle.
-[IO.File]::WriteAllText(
-    $LatestPath,
-    $manifest,
-    [Text.UTF8Encoding]::new($false)
-)
-
-Write-Host ""
-Write-Host "==> Done." -ForegroundColor Green
-Write-Host "    Manifest: $LatestPath" -ForegroundColor Green
-Write-Host "    Artifacts:" -ForegroundColor Green
-$artifacts | ForEach-Object { Write-Host "      $_" -ForegroundColor Green }
-Write-Host ""
-
-# 4) Print the gh release create command. The user runs it
-# manually after reviewing the manifest.
-Write-Host "==> Next step: create the GitHub release manually:" -ForegroundColor Yellow
-Write-Host ""
-$artifactList = ($artifacts + @($LatestPath)) -join '" "'
-Write-Host "  gh release create v$Version \"" -NoNewline
-Write-Host $artifactList -NoNewline
-Write-Host "\" --title \"v$Version\" --generate-notes" -ForegroundColor Yellow
-Write-Host ""
-Write-Host "==> DO NOT publish until you've reviewed latest.json." -ForegroundColor Magenta
