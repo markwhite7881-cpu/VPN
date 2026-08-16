@@ -43,10 +43,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout --recurse-submodules \
-            https://github.com/Leadaxe/sing-box-lx.git /tmp/sing-box-src
+          git init /tmp/sing-box-src
           cd /tmp/sing-box-src
-          git checkout --detach '9558ceb27bc1e92e2ecfa96ebfe6b3f688344c5a'
+          git remote add origin https://github.com/Leadaxe/sing-box-lx.git
+          git fetch --depth 1 origin 9558ceb27bc1e92e2ecfa96ebfe6b3f688344c5a
+          git checkout --detach FETCH_HEAD
           git submodule update --init --recursive --depth 1
           CGO_ENABLED=1 GOOS=darwin GOARCH='${{ matrix.goarch }}' go build \
             -tags 'with_xhttp with_awg with_quic with_wireguard with_utls with_clash_api with_naive_outbound with_lx_command' \
@@ -71,13 +72,15 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           dmg_dir="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
           app_dir="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
-          dmg="$(find "$dmg_dir" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
-          app="$(find "$app_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
-          test -n "$dmg" && test -f "$dmg"
-          test -n "$app" && test -d "$app"
+          dmgs=()
+          while IFS= read -r path; do dmgs+=("$path"); done < <(find "$dmg_dir" -maxdepth 1 -type f -name '*.dmg')
+          apps=()
+          while IFS= read -r path; do apps+=("$path"); done < <(find "$app_dir" -maxdepth 1 -type d -name '*.app')
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::Expected exactly one DMG in $dmg_dir; found ${#dmgs[@]}"; exit 1; }
+          [ "${#apps[@]}" -eq 1 ] || { echo "::error::Expected exactly one app bundle in $app_dir; found ${#apps[@]}"; exit 1; }
           mkdir -p dist
-          cp "$dmg" "dist/Cloakwire_${version}_${{ matrix.label }}.dmg"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/Cloakwire_${version}_${{ matrix.label }}.app.zip"
+          cp "${dmgs[0]}" "dist/Cloakwire_${version}_${{ matrix.label }}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "${apps[0]}" "dist/Cloakwire_${version}_${{ matrix.label }}.app.zip"
           shasum -a 256 dist/* > dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
