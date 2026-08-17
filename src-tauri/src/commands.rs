@@ -172,6 +172,8 @@ pub async fn start_managed_singbox(
     })
 }
 
+#[tauri::command]
+pub async fn start_singbox(
     app: AppHandle,
     pm: State<'_, Arc<ProcessManager>>,
     config_path: String,
@@ -710,17 +712,6 @@ pub async fn reset_subscription_hwid(
 ) -> AppResult<()> {
     subscriptions.reset_hwid().await?;
     Ok(())
-}
-
-/// Compatibility endpoint for old frontend builds. It uses the secure HTTP
-/// client and deliberately refuses full-config bundles rather than flattening
-/// their contents into legacy share-link DTOs.
-#[tauri::command]
-pub async fn fetch_subscription(
-    subscriptions: State<'_, Arc<SubscriptionService>>,
-    url: String,
-) -> AppResult<ParseLinksResult> {
-    subscriptions.fetch_legacy_links(&url).await
 }
 
 /// Detect whether the subscription is plain multiline or base64-encoded

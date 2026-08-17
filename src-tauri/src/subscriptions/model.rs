@@ -1,4 +1,6 @@
 use chrono::{DateTime, Utc};
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -52,7 +54,7 @@ impl SubscriptionErrorKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubscriptionRecord {
     pub id: String,
     pub name: String,
@@ -102,7 +104,7 @@ impl SubscriptionRecord {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChildProfileRecord {
     pub key: String,
     pub name: String,
@@ -122,8 +124,41 @@ impl ChildProfileRecord {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct ProviderMetadata {
+impl fmt::Debug for SubscriptionRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SubscriptionRecord")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("engine", &self.engine)
+            .field("interval_minutes", &self.interval_minutes)
+            .field("active_child_key", &self.active_child_key)
+            .field("children", &self.children.iter().map(ChildProfileRecord::to_summary).collect::<Vec<_>>())
+            .field("link_count", &self.link_outbounds.len())
+            .field("bundle_digest", &self.bundle_digest)
+            .field("metadata", &self.metadata)
+            .field("last_success_at", &self.last_success_at)
+            .field("last_http_status", &self.last_http_status)
+            .field("last_error", &self.last_error.as_ref().map(SubscriptionFailure::to_safe))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ChildProfileRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ChildProfileRecord")
+            .field("key", &self.key)
+            .field("name", &self.name)
+            .field("engine", &self.engine)
+            .field("digest", &self.digest)
+            .field("config", &"<redacted>")
+            .finish()
+    }
+}
+
+
     #[serde(default)]
     pub profile_title: Option<String>,
     #[serde(default)]

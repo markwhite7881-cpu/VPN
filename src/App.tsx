@@ -530,7 +530,7 @@ export default function App() {
       const managed = await api.startManaged({
         manualOutbounds: manualProfiles,
         subscriptionLinks: subs.snapshot.link_outbounds.flatMap((group) => group.links.map((link) => ({ subscription_id: group.subscription_id, link_key: link.key }))),
-        selectAllSubscriptionLinks: true,
+        selectAllSubscriptionLinks: subs.snapshot.link_outbounds.length > 0,
         settings,
       });
       const path = managed.config_path;

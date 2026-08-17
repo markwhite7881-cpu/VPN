@@ -130,7 +130,6 @@ pub fn run() {
             commands::lookup_geoip,
             commands::start_traffic,
             commands::stop_traffic,
-            commands::fetch_subscription,
             commands::list_subscriptions,
             commands::add_subscription,
             commands::remove_subscription,

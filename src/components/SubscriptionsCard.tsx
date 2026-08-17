@@ -134,7 +134,7 @@ export function SubscriptionsCard({
         {subs.length === 0 && !adding && (
           <p className="rounded border border-border bg-card/40 p-3 text-[11px] text-muted-foreground">
             No subscriptions yet. Click <strong>+</strong> to add a URL.
-            Stored locally — never uploaded.
+            Stored securely by the backend.
           </p>
         )}
 
