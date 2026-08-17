@@ -4,8 +4,11 @@
 //! sees errors as `{ kind, message }` (see error.rs).
 
 use std::ffi::OsString;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -129,6 +132,165 @@ pub struct ManagedProfileInput {
     pub child_key: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReadyProfileInput {
+    pub subscription_id: String,
+    pub child_key: String,
+    pub routing: config::RoutingOptions,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadyProfileResult {
+    pub status: StatusReport,
+    pub routing: crate::xray::RoutingApplicability,
+}
+
+/// Resolve a stored subscription child and start it through its engine-specific lifecycle.
+/// Raw provider configuration is never accepted from the WebView.
+#[tauri::command]
+pub async fn start_ready_profile(
+    app: AppHandle,
+    pm: State<'_, Arc<ProcessManager>>,
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    input: ReadyProfileInput,
+) -> AppResult<ReadyProfileResult> {
+    let result = start_ready_profile_inner(app, pm.clone(), subscriptions, input).await;
+    if result.is_err() {
+        let _ = crate::process::clear_system_proxy();
+        pm.reset().await;
+    }
+    result
+}
+
+async fn start_ready_profile_inner(
+    app: AppHandle,
+    pm: State<'_, Arc<ProcessManager>>,
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    input: ReadyProfileInput,
+) -> AppResult<ReadyProfileResult> {
+    let profile = subscriptions
+        .resolve_child_profile(&input.subscription_id, &input.child_key)
+        .await?;
+
+    let (value, proxy, binary, routing) = match profile.engine {
+        EngineKind::Xray => {
+            let prepared = crate::xray::prepare_xray_runtime_config(
+                profile.config,
+                &input.routing,
+                allocate_loopback_port,
+            )?;
+            let binary = xray::locate_binary(&app)?;
+            let proxy = (prepared.proxy_host.clone(), prepared.proxy_port);
+            (prepared.value, Some(proxy), binary, prepared.applicability)
+        }
+        EngineKind::Singbox => {
+            return start_resolved_singbox_profile(app, pm, profile).await;
+        }
+    };
+
+    let path = write_runtime_config(&app, &value)?;
+    if let Err(error) = xray::validate_config(&binary, &path).await {
+        let _ = crate::process::clear_system_proxy();
+        pm.reset().await;
+        return Err(error);
+    }
+    if pm.is_running().await {
+        if let Err(error) = pm.stop().await {
+            let _ = crate::process::clear_system_proxy();
+            pm.reset().await;
+            return Err(error);
+        }
+    }
+    let status = match pm
+        .start_spec_with_app(
+            Some(&app),
+            LaunchSpec {
+                engine: EngineKind::Xray,
+                binary,
+                args: xray::run_args(&path).to_vec(),
+                config_path: path,
+                controller_url: None,
+                profile_key: Some(profile.key),
+                profile_name: Some(profile.name),
+            },
+        )
+        .await
+    {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = crate::process::clear_system_proxy();
+            pm.reset().await;
+            return Err(error);
+        }
+    };
+    if let Some((host, port)) = proxy {
+        if let Err(error) = crate::process::apply_system_proxy(&host, port) {
+            let _ = pm.stop().await;
+            let _ = crate::process::clear_system_proxy();
+            return Err(error);
+        }
+    }
+    Ok(ReadyProfileResult { status, routing })
+}
+
+async fn start_resolved_singbox_profile(
+    app: AppHandle,
+    pm: State<'_, Arc<ProcessManager>>,
+    profile: crate::subscriptions::ResolvedChildProfile,
+) -> AppResult<ReadyProfileResult> {
+    let path = write_runtime_config(&app, &profile.config)?;
+    if pm.is_running().await {
+        if let Err(error) = pm.stop().await {
+            let _ = crate::process::clear_system_proxy();
+            pm.reset().await;
+            return Err(error);
+        }
+    }
+    let status = pm
+        .start_spec_with_app(
+            Some(&app),
+            LaunchSpec {
+                engine: EngineKind::Singbox,
+                binary: singbox::locate_binary(&app)?,
+                args: singbox::run_args(&path).to_vec(),
+                config_path: path,
+                controller_url: None,
+                profile_key: Some(profile.key),
+                profile_name: Some(profile.name),
+            },
+        )
+        .await?;
+    Ok(ReadyProfileResult {
+        status,
+        routing: crate::xray::RoutingApplicability::default(),
+    })
+}
+
+fn write_runtime_config(app: &AppHandle, value: &serde_json::Value) -> AppResult<PathBuf> {
+    let dir = app
+        .path()
+        .temp_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("cloakwire-runtime");
+    std::fs::create_dir_all(&dir).map_err(AppError::Io)?;
+    let path = dir.join(format!("{}.json", Uuid::new_v4()));
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(value).map_err(AppError::Serde)?,
+    )
+    .map_err(AppError::Io)?;
+    Ok(path)
+}
+
+fn allocate_loopback_port() -> AppResult<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|_| AppError::Spawn("could not allocate local proxy port".into()))?;
+    listener
+        .local_addr()
+        .map(|address| address.port())
+        .map_err(|_| AppError::Spawn("could not allocate local proxy port".into()))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedLaunchResult {
     pub status: StatusReport,
@@ -145,10 +307,35 @@ pub async fn start_managed_singbox(
     subscriptions: State<'_, Arc<SubscriptionService>>,
     input: ManagedLaunchInput,
 ) -> AppResult<ManagedLaunchResult> {
-    if let Some(profile) = input.profile {
+    if let Some(profile_ref) = input.profile {
         let profile = subscriptions
-            .resolve_child_profile(&profile.subscription_id, &profile.child_key)
+            .resolve_child_profile(&profile_ref.subscription_id, &profile_ref.child_key)
             .await?;
+        if profile.engine == EngineKind::Xray {
+            let ready = start_ready_profile_inner(
+                app,
+                pm.clone(),
+                subscriptions,
+                ReadyProfileInput {
+                    subscription_id: profile_ref.subscription_id,
+                    child_key: profile_ref.child_key,
+                    routing: input.settings.routing,
+                },
+            )
+            .await;
+            return match ready {
+                Ok(ready) => Ok(ManagedLaunchResult {
+                    status: ready.status,
+                    config_path: String::new(),
+                    profile_count: 1,
+                }),
+                Err(error) => {
+                    let _ = crate::process::clear_system_proxy();
+                    pm.reset().await;
+                    Err(error)
+                }
+            };
+        }
         let dir = app
             .path()
             .temp_dir()

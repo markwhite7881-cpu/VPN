@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
+use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
 
@@ -63,10 +64,38 @@ fn verify_binary(path: PathBuf) -> AppResult<PathBuf> {
     Ok(path)
 }
 
+pub async fn validate_config(binary: &Path, config_path: &Path) -> AppResult<()> {
+    let mut command = Command::new(binary);
+    command.args(validation_args(config_path));
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
+        .output()
+        .await
+        .map_err(|_| AppError::Spawn("Xray config validation could not start".into()))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(AppError::Validation("Xray config validation failed".into()))
+    }
+}
+
+pub fn validation_args(config_path: &Path) -> [std::ffi::OsString; 4] {
+    [
+        "run".into(),
+        "-test".into(),
+        "-config".into(),
+        config_path.as_os_str().to_os_string(),
+    ]
+}
+
 pub fn run_args(config_path: &Path) -> [std::ffi::OsString; 3] {
     [
         "run".into(),
-        "-c".into(),
+        "-config".into(),
         config_path.as_os_str().to_os_string(),
     ]
 }
@@ -90,12 +119,22 @@ fn first_existing(dir: &Path, names: &[String; 2]) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    fn argument_strings(args: impl IntoIterator<Item = std::ffi::OsString>) -> Vec<String> {
+        args.into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
-    fn preserves_raw_xray_config_arguments() {
-        let args = run_args(Path::new("profile.json"));
-        assert_eq!(args[0], "run");
-        assert_eq!(args[1], "-c");
-        assert_eq!(args[2], Path::new("profile.json").as_os_str());
+    fn xray_validation_uses_test_config_command() {
+        let args = argument_strings(validation_args(Path::new("runtime.json")));
+        assert_eq!(args, vec!["run", "-test", "-config", "runtime.json"]);
+    }
+
+    #[test]
+    fn xray_launch_uses_original_runtime_config_path() {
+        let args = argument_strings(run_args(Path::new("runtime.json")));
+        assert_eq!(args, vec!["run", "-config", "runtime.json"]);
     }
 
     #[test]

@@ -111,6 +111,7 @@ pub fn run() {
             commands::start_singbox,
             commands::start_connection,
             commands::start_managed_singbox,
+            commands::start_ready_profile,
             commands::stop_singbox,
             commands::stop_connection,
             commands::get_status,
