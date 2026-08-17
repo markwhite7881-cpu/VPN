@@ -180,7 +180,7 @@ export function HomeTab({
               "disabled:cursor-not-allowed",
               "shadow-lg",
               isRunning
-                ? "border-emerald-400/60 bg-emerald-500/15 text-emerald-300 hover:border-emerald-400/80 hover:bg-emerald-500/25 hover:shadow-emerald-500/20"
+                ? "border-foreground/40 bg-foreground/10 text-foreground hover:border-foreground/60 hover:bg-foreground/15"
                 : isTransition
                   ? "border-foreground/20 bg-foreground/5"
                   : "border-muted-foreground/40 bg-muted/40 text-muted-foreground hover:border-foreground/50 hover:bg-muted/60 hover:text-foreground",
@@ -193,7 +193,7 @@ export function HomeTab({
                 className={cn(
                   "h-8 w-8 transition-transform group-hover:scale-110",
                   isRunning
-                    ? "text-emerald-300 drop-shadow-[0_0_6px_rgba(52,211,153,0.5)]"
+                    ? "text-foreground"
                     : "",
                 )}
               />
@@ -239,38 +239,32 @@ export function HomeTab({
         </CardContent>
       </Card>
 
-      {/* Live traffic — Download is the "incoming" channel and
-          gets the cool emerald accent; Upload is the "outgoing"
-          channel and gets the warm amber accent. The two colours
-          sit on opposite sides of the wheel so the difference
-          reads at a glance even for users with mild colour
-          vision deficiency, and the icons (↘/↗) keep the
-          direction readable if the colour doesn't carry. */}
+      {/* Live traffic direction remains distinguishable through labels and icons. */}
       <div className="grid grid-cols-2 gap-3">
         <Card>
           <CardContent className="p-4">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-emerald-400/90">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
               <TrendingDown className="h-3 w-3" />
               Download
             </div>
-            <p className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-emerald-300">
+            <p className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-foreground">
               {formatRate(current?.down_bps ?? 0)}
             </p>
-            <p className="mt-0.5 font-mono text-[10px] text-emerald-400/60">
+            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
               total {formatBytes(current?.down_total ?? 0)}
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-400/90">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
               <TrendingUp className="h-3 w-3" />
               Upload
             </div>
-            <p className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-amber-300">
+            <p className="mt-1.5 font-mono text-2xl font-semibold tabular-nums text-foreground">
               {formatRate(current?.up_bps ?? 0)}
             </p>
-            <p className="mt-0.5 font-mono text-[10px] text-amber-400/60">
+            <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
               total {formatBytes(current?.up_total ?? 0)}
             </p>
           </CardContent>
@@ -349,7 +343,8 @@ export function HomeTab({
 }
 
 function connectionProfileLabel(profile: ConnectionProfile): string {
-  return profile.kind === "manual" ? profileLabel(profile.outbound) : profile.label;
+  if (profile.kind === "manual") return profileLabel(profile.outbound);
+  return profile.kind === "subscription" ? profile.label : profile.name;
 }
 
 function connectionProfileDisplay(
@@ -365,6 +360,16 @@ function connectionProfileDisplay(
       protocol: profile.protocol,
       ms: undefined,
       key: `${profile.reference.subscription_id}-${profile.reference.link_key}`,
+    };
+  }
+  if (profile.kind === "ready_config") {
+    return {
+      flag: "🌐",
+      code: "??",
+      label: profile.name,
+      protocol: profile.engine === "singbox" ? "sing-box" : "Xray",
+      ms: undefined,
+      key: `${profile.subscriptionId}-${profile.key}`,
     };
   }
   const outbound = profile.outbound;

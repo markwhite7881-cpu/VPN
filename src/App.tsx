@@ -23,6 +23,7 @@ import { DEFAULT_SETTINGS } from "@/lib/defaults";
 import { loadManualProfiles, saveManualProfiles } from "@/lib/manualProfiles";
 import {
   buildConnectionProfiles,
+  canStartManagedSelection,
   managedSelectionForProfile,
   selectedManualOutbound,
 } from "@/lib/connectionProfiles";
@@ -522,6 +523,15 @@ export default function App() {
       setError("Preview mode — start the Tauri shell to actually run sing-box.");
       return;
     }
+    if (!canStartManagedSelection(profiles, selectedIndex)) {
+      setError("Selected subscription configuration is not executable yet.");
+      return;
+    }
+    const selection = managedSelectionForProfile(manualProfiles, profiles, selectedIndex);
+    if (!selection) {
+      setError("Selected subscription configuration is not executable yet.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -535,7 +545,7 @@ export default function App() {
       //    sing-box boots goes straight through the picked server.
       //    No more `auto` urltest flash for the first packet.
       const managed = await api.startManaged({
-        ...managedSelectionForProfile(manualProfiles, profiles, selectedIndex),
+        ...selection,
         settings,
       });
       const path = managed.config_path;
@@ -728,6 +738,7 @@ export default function App() {
       // Resolve the new settings value up front, in two distinct
       // branches, so TypeScript's narrowing is happy in the async
       // closure below and the path is obvious for a human reader.
+      const selectedProfile = profiles[index];
       const selectedManual = selectedManualOutbound(profiles, index);
       const pickedTag = isAuto
         ? null
@@ -742,6 +753,7 @@ export default function App() {
         // Connect goes straight through the picked server.
         default_outbound: pickedTag,
       }));
+      if (selectedProfile?.kind === "ready_config") return;
       // If sing-box is already up, take it down cleanly, regenerate
       // the config with the new `default_outbound` baked into the
       // selector's `default`, then bring it back up. This is a
@@ -814,7 +826,7 @@ export default function App() {
             // tunnel-mode check (admin / Wintun) is handled inside
             // sing-box itself — we just try, and surface any error
             // message in the red banner below the hero.
-            canStart={profiles.length > 0}
+            canStart={canStartManagedSelection(profiles, selectedIndex)}
             configName={configPath ? basename(configPath) : null}
             profiles={profiles}
             selectedIndex={selectedIndex}
@@ -852,6 +864,7 @@ export default function App() {
             onRefreshSub={subs.refreshOne}
             onRefreshAllSubs={subs.refreshAll}
             onSetSubInterval={subs.setIntervalFor}
+            onSelectSubChild={subs.selectChild}
           />
         ),
       },
@@ -924,6 +937,7 @@ export default function App() {
       subs.refreshOne,
       subs.refreshAll,
       subs.setIntervalFor,
+      subs.selectChild,
       binary,
       version,
       onPickConfig,

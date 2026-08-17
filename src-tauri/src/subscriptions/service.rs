@@ -406,7 +406,7 @@ fn resolve_link_refs_from_records(
             .link_key
             .strip_prefix("index-")
             .and_then(|value| value.parse::<usize>().ok())
-            .filter(|_| reference.link_key.chars().all(|value| value.is_ascii_digit() || value == '-'))
+            .filter(|index| reference.link_key == format!("index-{index}"))
             .ok_or_else(|| AppError::Validation("subscription link selection is invalid".into()))?;
         let outbound = record
             .link_outbounds

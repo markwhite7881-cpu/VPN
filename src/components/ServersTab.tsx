@@ -34,6 +34,7 @@ export interface ServersTabProps {
   onRefreshSub: (id: string) => void;
   onRefreshAllSubs: () => void;
   onSetSubInterval: (id: string, minutes: number) => void;
+  onSelectSubChild: (subscriptionId: string, childKey: string) => void;
   /** ip → country code from the GeoIP cache (useGeoIp). */
   geoipByIp: Record<string, string>;
 }
@@ -55,6 +56,7 @@ export function ServersTab({
   onRefreshSub,
   onRefreshAllSubs,
   onSetSubInterval,
+  onSelectSubChild,
   geoipByIp,
 }: ServersTabProps) {
   const [addOpen, setAddOpen] = useState(true);
@@ -200,6 +202,7 @@ export function ServersTab({
               onRefresh={onRefreshSub}
               onRefreshAll={onRefreshAllSubs}
               onIntervalChange={onSetSubInterval}
+              onSelectChild={onSelectSubChild}
             />
           </CardContent>
         )}
@@ -251,7 +254,7 @@ export function ServersTab({
                     geoipByIp={geoipByIp}
                     onRemove={() => onRemove(i)}
                   />
-                ) : (
+                ) : profile.kind === "subscription" ? (
                   <div
                     key={`subscription-${profile.reference.subscription_id}-${profile.reference.link_key}`}
                     className="rounded-md border border-border bg-card/40 p-3"
@@ -264,6 +267,21 @@ export function ServersTab({
                     </div>
                     <p className="mt-1.5 text-[11px] text-muted-foreground">
                       Subscription link — resolved securely when connecting.
+                    </p>
+                  </div>
+                ) : (
+                  <div
+                    key={`ready-config-${profile.subscriptionId}-${profile.key}`}
+                    className="rounded-md border border-border bg-card/40 p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                        {profile.engine === "singbox" ? "sing-box" : "Xray"}
+                      </Badge>
+                      <span className="truncate text-sm font-medium">{profile.name}</span>
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      Ready configuration — selected for this subscription, execution is not available yet.
                     </p>
                   </div>
                 ),

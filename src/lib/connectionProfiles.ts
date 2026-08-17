@@ -1,4 +1,5 @@
 import type {
+  EngineKind,
   Outbound,
   SubscriptionLinkRef,
   SubscriptionSnapshot,
@@ -13,6 +14,13 @@ export type ConnectionProfile =
       reference: SubscriptionLinkRef;
       label: string;
       protocol: string;
+    }
+  | {
+      kind: "ready_config";
+      subscriptionId: string;
+      key: string;
+      name: string;
+      engine: EngineKind;
     };
 
 export type ManagedConnectionSelection = {
@@ -21,22 +29,72 @@ export type ManagedConnectionSelection = {
   selectAllSubscriptionLinks: boolean;
 };
 
-/** Manual entries always precede backend-owned opaque subscription links. */
+/**
+ * Manual entries come first. Subscription-owned entries then preserve their
+ * backend snapshot order: opaque links before safe ready-config children.
+ */
 export function buildConnectionProfiles(
   manualOutbounds: Outbound[],
   snapshot: SubscriptionSnapshot,
 ): ConnectionProfile[] {
-  return [
-    ...manualOutbounds.map((outbound) => ({ kind: "manual" as const, outbound })),
-    ...snapshot.link_outbounds.flatMap((group) =>
-      group.links.map((link) => ({
+  const profiles: ConnectionProfile[] = manualOutbounds.map((outbound) => ({
+    kind: "manual",
+    outbound,
+  }));
+  const linksBySubscription = new Map(
+    snapshot.link_outbounds.map((group) => [group.subscription_id, group]),
+  );
+  const seenSubscriptions = new Set<string>();
+
+  for (const subscription of snapshot.subscriptions) {
+    seenSubscriptions.add(subscription.id);
+    const linkGroup = linksBySubscription.get(subscription.id);
+    if (linkGroup) {
+      profiles.push(
+        ...linkGroup.links.map((link) => ({
+          kind: "subscription" as const,
+          reference: { subscription_id: linkGroup.subscription_id, link_key: link.key },
+          label: link.label,
+          protocol: link.protocol,
+        })),
+      );
+    }
+    profiles.push(
+      ...subscription.children.map((child) => ({
+        kind: "ready_config" as const,
+        subscriptionId: subscription.id,
+        key: child.key,
+        name: child.name,
+        engine: child.engine,
+      })),
+    );
+  }
+
+  // Preserve existing snapshots that contain a link group without a summary.
+  for (const linkGroup of snapshot.link_outbounds) {
+    if (seenSubscriptions.has(linkGroup.subscription_id)) continue;
+    profiles.push(
+      ...linkGroup.links.map((link) => ({
         kind: "subscription" as const,
-        reference: { subscription_id: group.subscription_id, link_key: link.key },
+        reference: { subscription_id: linkGroup.subscription_id, link_key: link.key },
         label: link.label,
         protocol: link.protocol,
       })),
-    ),
-  ];
+    );
+  }
+  return profiles;
+}
+
+/** A ready configuration is visible and selectable, but not executable in Task 4. */
+export function canStartManagedSelection(
+  profiles: ConnectionProfile[],
+  selectedIndex: number,
+): boolean {
+  if (selectedIndex === -1) {
+    return profiles.some((profile) => profile.kind !== "ready_config");
+  }
+  const selected = profiles[selectedIndex];
+  return !!selected && selected.kind !== "ready_config";
 }
 
 /**
@@ -47,7 +105,7 @@ export function managedSelectionForProfile(
   manualOutbounds: Outbound[],
   profiles: ConnectionProfile[],
   selectedIndex: number,
-): ManagedConnectionSelection {
+): ManagedConnectionSelection | null {
   const selected = profiles[selectedIndex];
   if (selectedIndex === -1 || !selected) {
     return {
@@ -62,6 +120,7 @@ export function managedSelectionForProfile(
       selectAllSubscriptionLinks: false,
     };
   }
+  if (selected.kind === "ready_config") return null;
   return {
     manualOutbounds,
     selectAllSubscriptionLinks: false,

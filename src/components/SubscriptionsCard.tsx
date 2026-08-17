@@ -13,6 +13,7 @@ export interface SubscriptionsCardProps {
   onRefresh: (id: string) => void;
   onRefreshAll: () => void;
   onIntervalChange: (id: string, minutes: number) => void;
+  onSelectChild: (subscriptionId: string, childKey: string) => void;
   onApply?: () => void;
   available?: never;
 }
@@ -25,6 +26,7 @@ export function SubscriptionsCard({
   onRefresh,
   onRefreshAll,
   onIntervalChange,
+  onSelectChild,
 }: SubscriptionsCardProps) {
   const [adding, setAdding] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -111,7 +113,6 @@ export function SubscriptionsCard({
                   onChange={(e) => setDraftInterval(parseInt(e.target.value, 10))}
                   className="rounded border border-input bg-background px-1 py-0.5 font-mono text-[11px]"
                 >
-                  <option value={0}>never</option>
                   <option value={15}>15 min</option>
                   <option value={30}>30 min</option>
                   <option value={60}>1 h</option>
@@ -147,6 +148,7 @@ export function SubscriptionsCard({
               onRefresh={() => onRefresh(s.id)}
               onRemove={() => onRemove(s.id)}
               onIntervalChange={(m) => onIntervalChange(s.id, m)}
+              onSelectChild={(childKey) => onSelectChild(s.id, childKey)}
             />
           ))}
         </div>
@@ -161,12 +163,14 @@ function SubscriptionRow({
   onRefresh,
   onRemove,
   onIntervalChange,
+  onSelectChild,
 }: {
   sub: SubscriptionSummary;
   loading: boolean;
   onRefresh: () => void;
   onRemove: () => void;
   onIntervalChange: (m: number) => void;
+  onSelectChild: (childKey: string) => void;
 }) {
   const fetched = sub.last_success_at
     ? new Date(sub.last_success_at).toLocaleTimeString()
@@ -232,7 +236,6 @@ function SubscriptionRow({
           onChange={(e) => onIntervalChange(parseInt(e.target.value, 10))}
           className="rounded border border-input bg-background px-1 py-0 font-mono text-[10px]"
         >
-          <option value={0}>never</option>
           <option value={15}>15m</option>
           <option value={30}>30m</option>
           <option value={60}>1h</option>
@@ -240,6 +243,30 @@ function SubscriptionRow({
           <option value={1440}>24h</option>
         </select>
       </div>
+      {sub.children.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1" aria-label="Subscription configuration selection">
+          {sub.children.map((child) => {
+            const active = sub.active_child_key === child.key;
+            return (
+              <Button
+                key={child.key}
+                type="button"
+                variant={active ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 gap-1 px-2 text-[10px]"
+                onClick={() => onSelectChild(child.key)}
+                aria-pressed={active}
+                title={`Select ${child.name}`}
+              >
+                <Badge variant="outline" className="px-1 py-0 text-[9px]">
+                  {child.engine === "singbox" ? "sing-box" : "Xray"}
+                </Badge>
+                <span className="max-w-36 truncate">{child.name}</span>
+              </Button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

@@ -79,10 +79,16 @@ async fn opaque_link_refs_resolve_and_reject_invalid_selection() {
     assert!(matches!(resolved.first(), Some(Outbound::Vless(_))));
     let stale = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-9".into() }]).await;
     assert!(matches!(stale, Err(AppError::Validation(_))));
+    for invalid_key in ["index-00", "index-01", "index-+1", "index--1", "index-"] {
+        let invalid = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: invalid_key.into() }]).await;
+        assert!(matches!(invalid, Err(AppError::Validation(_))), "{invalid_key} must be rejected");
+    }
     let duplicate = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-0".into() }; 2]).await;
     assert!(matches!(duplicate, Err(AppError::Validation(_))));
 }
 
+#[tokio::test]
+async fn sends_exact_headers_and_parses_metadata() {
     let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nProfile-Title: Demo\r\nContent-Length: 33\r\nConnection: close\r\n\r\n{\"outbounds\":[{\"type\":\"direct\"}]}".to_vec();
     let (url, captured) = spawn_server(response, Duration::ZERO).await;
     let hwid = Uuid::new_v4();

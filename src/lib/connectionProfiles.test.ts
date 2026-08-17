@@ -49,6 +49,31 @@ describe("connection profile selection", () => {
     ]);
   });
 
+  it("keeps ready-config children safe and non-executable", () => {
+    const profiles = buildConnectionProfiles(manual, {
+      subscriptions: [
+        {
+          id: "sub-a", name: "Links", kind: "link_list", engine: "singbox", interval_minutes: 60,
+          active_child_key: null, children: [], metadata: {}, last_success_at: null, last_http_status: 200, last_error: null,
+        },
+        {
+          id: "sub-b", name: "Bundle", kind: "xray_bundle", engine: "xray", interval_minutes: 60,
+          active_child_key: "index-0",
+          children: [{ key: "index-0", name: "Primary", engine: "xray" }],
+          metadata: {}, last_success_at: null, last_http_status: 200, last_error: null,
+        },
+      ],
+      link_outbounds: snapshot.link_outbounds,
+    });
+
+    expect(profiles.slice(2)).toEqual([
+      { kind: "subscription", reference: { subscription_id: "sub-a", link_key: "index-0" }, label: "vless link 1", protocol: "vless" },
+      { kind: "subscription", reference: { subscription_id: "sub-a", link_key: "index-1" }, label: "trojan link 2", protocol: "trojan" },
+      { kind: "ready_config", subscriptionId: "sub-b", key: "index-0", name: "Primary", engine: "xray" },
+    ]);
+    expect(managedSelectionForProfile(manual, profiles, 4)).toBeNull();
+  });
+
   it("uses all links for Auto and one opaque reference for an explicit subscription", () => {
     const profiles = buildConnectionProfiles(manual, snapshot);
 
