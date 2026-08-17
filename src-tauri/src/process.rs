@@ -14,6 +14,7 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -98,9 +99,15 @@ pub struct ProcessManager {
     current_config: Mutex<Option<PathBuf>>,
     /// URL of the Clash API (if any). Set when start() is called.
     controller_url: Mutex<Option<String>>,
+    /// Monotonically increasing ID for each launch attempt.
+    next_run_id: AtomicU64,
+    /// ID currently allowed to mutate runtime state; zero means no active run.
+    active_run_id: AtomicU64,
     /// Live traffic WebSocket reader. Started automatically when
     /// `controller_url` is set, stopped when the process exits.
     traffic: Arc<TrafficStream>,
+    /// Serializes traffic start/stop transitions across launch generations.
+    traffic_lifecycle: Mutex<()>,
 }
 
 impl Default for ProcessManager {
@@ -112,7 +119,10 @@ impl Default for ProcessManager {
             started_at: Mutex::new(None),
             current_config: Mutex::new(None),
             controller_url: Mutex::new(None),
+            next_run_id: AtomicU64::new(0),
+            active_run_id: AtomicU64::new(0),
             traffic: Arc::new(TrafficStream::new()),
+            traffic_lifecycle: Mutex::new(()),
         }
     }
 }
@@ -189,21 +199,22 @@ impl ProcessManager {
             status.status = Status::Starting;
             status.last_error = None;
         }
+        let run_id = self.next_run_id.fetch_add(1, Ordering::AcqRel) + 1;
+        self.active_run_id.store(run_id, Ordering::Release);
         let label = match spec.engine {
             EngineKind::Singbox => "starting sing-box profile",
             EngineKind::Xray => "starting Xray profile",
         };
         self.push_log(LogStream::System, label).await;
         if spec.engine == EngineKind::Singbox {
-            if let Err(_msg) = check_tun_capabilities(&spec.binary, &spec.config_path).await {
+            if let Err(message) = check_tun_capabilities(&spec.binary, &spec.config_path).await {
+                self.abort_start(run_id).await;
                 self.push_log(
                     LogStream::System,
-                    "TUN capability check failed: could not read runtime configuration",
+                    format!("TUN capability check failed: {message}"),
                 )
                 .await;
-                return Err(AppError::TunCapabilities(
-                    "could not read runtime configuration".into(),
-                ));
+                return Err(AppError::TunCapabilities(message));
             }
         }
         let mut cmd = Command::new(&spec.binary);
@@ -217,15 +228,26 @@ impl ProcessManager {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| AppError::Spawn(format!("{}: {e}", spec.binary.display())))?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                self.abort_start(run_id).await;
+                return Err(AppError::Spawn(format!(
+                    "{}: {error}",
+                    spec.binary.display()
+                )));
+            }
+        };
         let pid = child.id();
         if spec.engine == EngineKind::Singbox {
             let config_path = spec.config_path.clone();
+            let manager = Arc::clone(self);
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                if let Err(_error) = set_tun_dns_from_config(&config_path).await {
+                if !manager.is_active_singbox_run(run_id).await {
+                    return;
+                }
+                if set_tun_dns_from_config(&config_path).await.is_err() {
                     log::warn!("could not read runtime configuration for TUN DNS setup");
                 }
             });
@@ -253,14 +275,6 @@ impl ProcessManager {
         *self.current_config.lock().await = Some(spec.config_path);
         if spec.engine == EngineKind::Singbox {
             *self.controller_url.lock().await = spec.controller_url.clone();
-            if let (Some(controller_url), Some(app)) = (spec.controller_url.clone(), app.cloned()) {
-                let traffic = Arc::clone(&self.traffic);
-                tokio::spawn(async move {
-                    if let Err(e) = traffic.start(app, &controller_url).await {
-                        log::warn!("traffic stream start failed: {e}");
-                    }
-                });
-            }
         }
         let mut status = self.status.lock().await;
         status.status = Status::Running;
@@ -269,7 +283,24 @@ impl ProcessManager {
         status.engine = Some(spec.engine);
         status.profile_key = spec.profile_key;
         status.profile_name = spec.profile_name;
-        Ok(status.clone())
+        let report = status.clone();
+        drop(status);
+        if spec.engine == EngineKind::Singbox {
+            if let (Some(controller_url), Some(app)) = (spec.controller_url, app.cloned()) {
+                if self.is_active_singbox_run(run_id).await {
+                    let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+                    if let Err(error) = self.traffic.start(app, &controller_url).await {
+                        log::warn!("traffic stream start failed: {error}");
+                    } else if !self.is_active_singbox_run(run_id).await {
+                        // Finalization may have invalidated this run while
+                        // `TrafficStream::start` was awaiting. Do not leave
+                        // an old sing-box controller stream alive for Xray.
+                        self.traffic.stop().await;
+                    }
+                }
+            }
+        }
+        Ok(report)
     }
 
     /// Compatibility route for existing sing-box callers.
@@ -320,6 +351,7 @@ impl ProcessManager {
 
         // The traffic stream belongs exclusively to sing-box's Clash controller.
         if engine == Some(EngineKind::Singbox) {
+            let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
             self.traffic.stop().await;
         }
 
@@ -336,8 +368,9 @@ impl ProcessManager {
                 if let Some(ch) = g.as_mut() {
                     match ch.try_wait() {
                         Ok(Some(status)) => {
+                            let run_id = self.active_run_id.load(Ordering::Acquire);
                             *g = None;
-                            self.finalize_exit(Some(status.code().unwrap_or(-1)), None)
+                            self.finalize_exit(run_id, Some(status.code().unwrap_or(-1)), None)
                                 .await;
                             return Ok(self.status.lock().await.clone());
                         }
@@ -345,8 +378,10 @@ impl ProcessManager {
                             if std::time::Instant::now() >= deadline {
                                 let _ = ch.start_kill();
                                 let _ = ch.wait().await;
+                                let run_id = self.active_run_id.load(Ordering::Acquire);
                                 *g = None;
                                 self.finalize_exit(
+                                    run_id,
                                     Some(-1),
                                     Some("graceful shutdown timed out, force-killed".to_string()),
                                 )
@@ -355,8 +390,9 @@ impl ProcessManager {
                             }
                         }
                         Err(e) => {
+                            let run_id = self.active_run_id.load(Ordering::Acquire);
                             *g = None;
-                            self.finalize_exit(None, Some(format!("try_wait failed: {e}")))
+                            self.finalize_exit(run_id, None, Some(format!("try_wait failed: {e}")))
                                 .await;
                             return Ok(self.status.lock().await.clone());
                         }
@@ -403,11 +439,13 @@ impl ProcessManager {
             )
             .await;
         }
+        self.active_run_id.store(0, Ordering::Release);
         *self.child.lock().await = None;
         *self.status.lock().await = StatusReport::default();
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
         *self.controller_url.lock().await = None;
+        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
         self.traffic.stop().await;
         self.push_log(LogStream::System, "process manager state reset")
             .await;
@@ -429,43 +467,73 @@ impl ProcessManager {
     /// appears to be down. Idempotent: no-op when there's nothing to
     /// clear (e.g. on platforms without a system proxy or when the
     /// current session was a TUN-only run).
-    async fn finalize_exit(&self, code: Option<i32>, err: Option<String>) {
-        let mut status = self.status.lock().await;
-        let engine_label = match status.engine {
-            Some(EngineKind::Xray) => "Xray",
-            _ => "sing-box",
-        };
-        status.status = Status::Stopped;
-        status.pid = None;
-        status.uptime_secs = None;
-        status.last_exit_code = code;
-        status.last_error = err.clone();
-        status.engine = None;
-        status.profile_key = None;
-        status.profile_name = None;
+    async fn finalize_exit(&self, run_id: u64, code: Option<i32>, err: Option<String>) {
+        if self.active_run_id.load(Ordering::Acquire) != run_id {
+            return;
+        }
+
+        // Unexpected exits bypass `stop`; cancel the old run before another
+        // launch can start a sing-box traffic task.
+        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+        self.traffic.stop().await;
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
         *self.controller_url.lock().await = None;
-        let line = match (&err, code) {
-            (Some(e), _) => format!("{engine_label} exited unexpectedly: {e}"),
-            (None, Some(c)) if c != 0 => format!("{engine_label} exited with code {c}"),
-            (None, _) => format!("{engine_label} stopped"),
+
+        let line = {
+            let mut status = self.status.lock().await;
+            if self.active_run_id.load(Ordering::Acquire) != run_id {
+                return;
+            }
+            let engine_label = match status.engine {
+                Some(EngineKind::Xray) => "Xray",
+                _ => "sing-box",
+            };
+            status.status = Status::Stopped;
+            status.pid = None;
+            status.uptime_secs = None;
+            status.last_exit_code = code;
+            status.last_error = err.clone();
+            status.engine = None;
+            status.profile_key = None;
+            status.profile_name = None;
+            // Status is the launch gate. Invalidate this ID before dropping it
+            // so older async tasks cannot touch a later run.
+            self.active_run_id.store(0, Ordering::Release);
+            match (&err, code) {
+                (Some(error), _) => format!("{engine_label} exited unexpectedly: {error}"),
+                (None, Some(exit_code)) if exit_code != 0 => {
+                    format!("{engine_label} exited with code {exit_code}")
+                }
+                (None, _) => format!("{engine_label} stopped"),
+            }
         };
-        drop(status);
-        // Unexpected exits bypass `stop`, so cancel any sing-box-owned traffic
-        // task before another engine can occupy the sole process slot.
-        self.traffic.stop().await;
         self.push_log(LogStream::System, line).await;
-        // Best-effort: roll back the system proxy so Windows doesn't
-        // keep trying to talk to a listener that no longer exists.
-        // This is the only thing standing between the user and a
-        // working internet after a crash.
-        if let Err(e) = clear_system_proxy() {
+        if let Err(error) = clear_system_proxy() {
             self.push_log(
                 LogStream::System,
-                format!("proxy: failed to clear on exit ({e})"),
+                format!("proxy: failed to clear on exit ({error})"),
             )
             .await;
+        }
+    }
+
+    async fn is_active_singbox_run(&self, run_id: u64) -> bool {
+        if self.active_run_id.load(Ordering::Acquire) != run_id {
+            return false;
+        }
+        let status = self.status.lock().await;
+        status.status == Status::Running && status.engine == Some(EngineKind::Singbox)
+    }
+
+    async fn abort_start(&self, run_id: u64) {
+        if self.active_run_id.load(Ordering::Acquire) != run_id {
+            return;
+        }
+        let mut status = self.status.lock().await;
+        if self.active_run_id.load(Ordering::Acquire) == run_id {
+            *status = StatusReport::default();
+            self.active_run_id.store(0, Ordering::Release);
         }
     }
 
@@ -482,9 +550,10 @@ impl ProcessManager {
                     match child.try_wait() {
                         Ok(Some(status)) => {
                             let code = status.code();
+                            let run_id = self.active_run_id.load(Ordering::Acquire);
                             *guard = None;
                             drop(guard);
-                            self.finalize_exit(code, None).await;
+                            self.finalize_exit(run_id, code, None).await;
                         }
                         Ok(None) => {
                             // Update uptime.
@@ -494,9 +563,10 @@ impl ProcessManager {
                             }
                         }
                         Err(e) => {
+                            let run_id = self.active_run_id.load(Ordering::Acquire);
                             *guard = None;
                             drop(guard);
-                            self.finalize_exit(None, Some(format!("try_wait failed: {e}")))
+                            self.finalize_exit(run_id, None, Some(format!("try_wait failed: {e}")))
                                 .await;
                         }
                     }
@@ -969,18 +1039,13 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
         return Ok(());
     }
 
-    Err(format!(
-        "TUN mode needs CAP_NET_ADMIN and CAP_NET_RAW on the sing-box binary, but \
-         `{}` doesn't have both. Reinstall the .deb (its postinst applies these caps \
-         automatically) or run manually:\n  \
-         sudo setcap cap_net_admin,cap_net_raw=+ep {}\n  \
-         getcap stdout: {}\n  \
-         getcap stderr: {}",
-        binary.display(),
-        binary.display(),
-        stdout.trim(),
-        stderr.trim(),
-    ))
+    let _ = (stdout, stderr);
+    Err(
+        "TUN mode needs CAP_NET_ADMIN and CAP_NET_RAW on the sing-box binary. \
+         Reinstall the .deb (its postinstall restores these capabilities) or run:\n  \
+         sudo setcap cap_net_admin,cap_net_raw=+ep <sing-box-binary>"
+            .to_string(),
+    )
 }
 
 #[cfg(target_os = "linux")]
@@ -1162,6 +1227,25 @@ mod engine_runtime_tests {
     }
 
     #[tokio::test]
+    async fn stale_exit_does_not_clear_a_newer_run() {
+        let pm = ProcessManager::new();
+        pm.active_run_id.store(2, Ordering::Release);
+        {
+            let mut status = pm.status.lock().await;
+            status.status = Status::Running;
+            status.engine = Some(EngineKind::Xray);
+            status.profile_key = Some("newer".into());
+        }
+
+        pm.finalize_exit(1, Some(0), None).await;
+
+        let status = pm.snapshot_status().await;
+        assert_eq!(status.status, Status::Running);
+        assert_eq!(status.engine, Some(EngineKind::Xray));
+        assert_eq!(status.profile_key.as_deref(), Some("newer"));
+    }
+
+    #[tokio::test]
     async fn xray_exit_uses_xray_label_and_clears_metadata() {
         let pm = ProcessManager::new();
         {
@@ -1171,7 +1255,8 @@ mod engine_runtime_tests {
             status.profile_name = Some("Xray profile".into());
         }
 
-        pm.finalize_exit(Some(0), None).await;
+        pm.active_run_id.store(1, Ordering::Release);
+        pm.finalize_exit(1, Some(0), None).await;
 
         let logs = pm.snapshot_logs(1).await;
         assert_eq!(logs[0].line, "Xray stopped");
