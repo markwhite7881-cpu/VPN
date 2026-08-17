@@ -23,6 +23,8 @@ use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+#[cfg(test)]
+use tokio::task::JoinHandle;
 
 use crate::engine::{EngineKind, LaunchSpec};
 use crate::error::{AppError, AppResult};
@@ -115,6 +117,10 @@ pub struct ProcessManager {
     /// Live traffic WebSocket reader. Started automatically when
     /// `controller_url` is set, stopped when the process exits.
     traffic: Arc<TrafficStream>,
+    /// Test-only ownership of spawned stdout/stderr tasks, so tests can await
+    /// EOF without relying on lifecycle watcher timing.
+    #[cfg(test)]
+    stdio_readers: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Default for ProcessManager {
@@ -130,6 +136,8 @@ impl Default for ProcessManager {
             active_run_id: AtomicU64::new(0),
             transition: Arc::new(Semaphore::new(1)),
             traffic: Arc::new(TrafficStream::new()),
+            #[cfg(test)]
+            stdio_readers: Mutex::new(Vec::new()),
         }
     }
 }
@@ -174,6 +182,14 @@ impl ProcessManager {
         status.status = Status::Running;
         status.pid = pid;
         status.engine = Some(engine);
+    }
+
+    #[cfg(test)]
+    async fn await_stdio_readers(&self) {
+        let readers = std::mem::take(&mut *self.stdio_readers.lock().await);
+        for reader in readers {
+            reader.await.expect("stdio reader task completes");
+        }
     }
 
     pub async fn snapshot_logs(&self, limit: usize) -> Vec<LogLine> {
@@ -267,7 +283,7 @@ impl ProcessManager {
         if let Some(stdout) = child.stdout.take() {
             let manager = Arc::clone(self);
             let engine = spec.engine;
-            tokio::spawn(async move {
+            let reader = tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Some(line) = frontend_log_line(engine, &line) {
@@ -275,11 +291,15 @@ impl ProcessManager {
                     }
                 }
             });
+            #[cfg(test)]
+            self.stdio_readers.lock().await.push(reader);
+            #[cfg(not(test))]
+            drop(reader);
         }
         if let Some(stderr) = child.stderr.take() {
             let manager = Arc::clone(self);
             let engine = spec.engine;
-            tokio::spawn(async move {
+            let reader = tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     if let Some(line) = frontend_log_line(engine, &line) {
@@ -287,6 +307,10 @@ impl ProcessManager {
                     }
                 }
             });
+            #[cfg(test)]
+            self.stdio_readers.lock().await.push(reader);
+            #[cfg(not(test))]
+            drop(reader);
         }
         *self.child.lock().await = Some(ChildSlot { run_id, child });
         *self.started_at.lock().await = Some(std::time::Instant::now());
@@ -1406,6 +1430,32 @@ mod engine_runtime_tests {
             profile_key: Some("test-xray".into()),
             profile_name: Some("Test Xray".into()),
         }
+    }
+
+    #[tokio::test]
+    async fn xray_spawned_stdio_is_not_exposed_to_frontend_logs() {
+        const STDOUT_SECRET: &str = "xray-stdout-secret-marker";
+        const STDERR_SECRET: &str = "xray-stderr-secret-marker";
+
+        let pm = Arc::new(ProcessManager::new());
+        let mut spec = test_xray_spec();
+        spec.args = vec![
+            OsString::from("-NoProfile"),
+            OsString::from("-NonInteractive"),
+            OsString::from("-Command"),
+            OsString::from(format!(
+                "[Console]::Out.WriteLine('{STDOUT_SECRET}'); [Console]::Error.WriteLine('{STDERR_SECRET}')"
+            )),
+        ];
+
+        pm.start_spec(spec).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(15), pm.await_stdio_readers())
+            .await
+            .expect("Xray stdout and stderr readers drain before logs are inspected");
+
+        let logs = pm.snapshot_logs(10).await;
+        assert!(logs.iter().all(|log| !log.line.contains(STDOUT_SECRET)));
+        assert!(logs.iter().all(|log| !log.line.contains(STDERR_SECRET)));
     }
 
     #[tokio::test]
