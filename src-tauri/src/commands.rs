@@ -608,13 +608,12 @@ pub async fn lookup_geoip(ips: Vec<String>) -> AppResult<Vec<(String, String)>> 
 
 #[tauri::command]
 pub async fn start_traffic(app: AppHandle, pm: State<'_, Arc<ProcessManager>>) -> AppResult<()> {
-    let base = api_url(&pm).await?;
-    pm.traffic().start(app, &base).await
+    pm.start_traffic(app).await
 }
 
 #[tauri::command]
 pub async fn stop_traffic(pm: State<'_, Arc<ProcessManager>>) -> AppResult<()> {
-    pm.traffic().stop().await;
+    pm.stop_traffic().await;
     Ok(())
 }
 

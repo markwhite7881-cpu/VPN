@@ -247,7 +247,7 @@ impl ProcessManager {
                 if !manager.is_active_singbox_run(run_id).await {
                     return;
                 }
-                if set_tun_dns_from_config(&config_path).await.is_err() {
+                if set_tun_dns_from_config(&manager, run_id, &config_path).await.is_err() {
                     log::warn!("could not read runtime configuration for TUN DNS setup");
                 }
             });
@@ -333,10 +333,7 @@ impl ProcessManager {
     /// Stop the running sing-box. Graceful: send SIGTERM/taskkill, then
     /// escalate to SIGKILL after `DEFAULT_TERMINATE_TIMEOUT`.
     pub async fn stop(self: &Arc<Self>) -> AppResult<StatusReport> {
-        let mut guard = self.child.lock().await;
-        let Some(child) = guard.as_mut() else {
-            return Err(AppError::NotRunning);
-        };
+        let mut child = self.child.lock().await.take().ok_or(AppError::NotRunning)?;
 
         let engine = {
             let mut status = self.status.lock().await;
@@ -355,54 +352,39 @@ impl ProcessManager {
             self.traffic.stop().await;
         }
 
-        // Try graceful first.
+        // Try graceful first. The child is owned locally for the rest of this
+        // async operation, so no child mutex guard can cross an await.
         let _ = child.start_kill();
-        let pid = child.id();
-        drop(guard);
-
-        // Wait for it to exit (with timeout), escalate if needed.
         let deadline = std::time::Instant::now() + DEFAULT_TERMINATE_TIMEOUT;
         loop {
-            {
-                let mut g = self.child.lock().await;
-                if let Some(ch) = g.as_mut() {
-                    match ch.try_wait() {
-                        Ok(Some(status)) => {
-                            let run_id = self.active_run_id.load(Ordering::Acquire);
-                            *g = None;
-                            self.finalize_exit(run_id, Some(status.code().unwrap_or(-1)), None)
-                                .await;
-                            return Ok(self.status.lock().await.clone());
-                        }
-                        Ok(None) => {
-                            if std::time::Instant::now() >= deadline {
-                                let _ = ch.start_kill();
-                                let _ = ch.wait().await;
-                                let run_id = self.active_run_id.load(Ordering::Acquire);
-                                *g = None;
-                                self.finalize_exit(
-                                    run_id,
-                                    Some(-1),
-                                    Some("graceful shutdown timed out, force-killed".to_string()),
-                                )
-                                .await;
-                                return Ok(self.status.lock().await.clone());
-                            }
-                        }
-                        Err(e) => {
-                            let run_id = self.active_run_id.load(Ordering::Acquire);
-                            *g = None;
-                            self.finalize_exit(run_id, None, Some(format!("try_wait failed: {e}")))
-                                .await;
-                            return Ok(self.status.lock().await.clone());
-                        }
-                    }
-                } else {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let run_id = self.active_run_id.load(Ordering::Acquire);
+                    self.finalize_exit(run_id, Some(status.code().unwrap_or(-1)), None)
+                        .await;
+                    return Ok(self.status.lock().await.clone());
+                }
+                Ok(None) if std::time::Instant::now() >= deadline => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    let run_id = self.active_run_id.load(Ordering::Acquire);
+                    self.finalize_exit(
+                        run_id,
+                        Some(-1),
+                        Some("graceful shutdown timed out, force-killed".to_string()),
+                    )
+                    .await;
+                    return Ok(self.status.lock().await.clone());
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    let run_id = self.active_run_id.load(Ordering::Acquire);
+                    self.finalize_exit(run_id, None, Some(format!("try_wait failed: {e}")))
+                        .await;
                     return Ok(self.status.lock().await.clone());
                 }
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
-            let _ = pid; // silence unused warning on platforms where id() is meaningful
         }
     }
 
@@ -424,8 +406,33 @@ impl ProcessManager {
 
     /// Borrow the live traffic-stream handle (for the `traffic_*`
     /// Tauri commands).
-    pub fn traffic(&self) -> Arc<TrafficStream> {
-        Arc::clone(&self.traffic)
+    /// Start manual traffic streaming only for the active sing-box run.
+    pub async fn start_traffic(self: &Arc<Self>, app: AppHandle) -> AppResult<()> {
+        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+        let run_id = self.active_run_id.load(Ordering::Acquire);
+        let controller_url = {
+            let status = self.status.lock().await;
+            if status.status != Status::Running || status.engine != Some(EngineKind::Singbox) {
+                return Err(AppError::Clash("sing-box is not running".to_string()));
+            }
+            drop(status);
+            self.controller_url.lock().await.clone().ok_or_else(|| {
+                AppError::Clash("sing-box controller is unavailable".to_string())
+            })?
+        };
+        self.traffic.start(app, &controller_url).await?;
+        if !self.is_active_singbox_run(run_id).await {
+            self.traffic.stop().await;
+            return Err(AppError::Clash("sing-box is no longer running".to_string()));
+        }
+        Ok(())
+    }
+
+    /// Stop manual traffic streaming through the same lifecycle gate used by
+    /// automatic launch and cleanup.
+    pub async fn stop_traffic(&self) {
+        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+        self.traffic.stop().await;
     }
 
     async fn reset_with_proxy_cleanup<F>(&self, clear_proxy: F)
@@ -545,29 +552,34 @@ impl ProcessManager {
         tauri::async_runtime::spawn(async move {
             loop {
                 tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
-                let mut guard = self.child.lock().await;
-                if let Some(child) = guard.as_mut() {
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            let code = status.code();
-                            let run_id = self.active_run_id.load(Ordering::Acquire);
-                            *guard = None;
-                            drop(guard);
-                            self.finalize_exit(run_id, code, None).await;
-                        }
-                        Ok(None) => {
-                            // Update uptime.
+                let exited = {
+                    let mut guard = self.child.lock().await;
+                    guard.as_mut().and_then(|child| match child.try_wait() {
+                        Ok(Some(status)) => Some(Ok(status)),
+                        Ok(None) => None,
+                        Err(error) => Some(Err(error)),
+                    })
+                };
+                match exited {
+                    Some(Ok(status)) => {
+                        let code = status.code();
+                        let run_id = self.active_run_id.load(Ordering::Acquire);
+                        self.child.lock().await.take();
+                        self.finalize_exit(run_id, code, None).await;
+                    }
+                    Some(Err(error)) => {
+                        let run_id = self.active_run_id.load(Ordering::Acquire);
+                        self.child.lock().await.take();
+                        self.finalize_exit(run_id, None, Some(format!("try_wait failed: {error}")))
+                            .await;
+                    }
+                    None => {
+                        // Update uptime without retaining the child guard.
+                        if self.child.lock().await.is_some() {
                             if let Some(start) = *self.started_at.lock().await {
-                                let mut s = self.status.lock().await;
-                                s.uptime_secs = Some(start.elapsed().as_secs());
+                                let mut status = self.status.lock().await;
+                                status.uptime_secs = Some(start.elapsed().as_secs());
                             }
-                        }
-                        Err(e) => {
-                            let run_id = self.active_run_id.load(Ordering::Acquire);
-                            *guard = None;
-                            drop(guard);
-                            self.finalize_exit(run_id, None, Some(format!("try_wait failed: {e}")))
-                                .await;
                         }
                     }
                 }
@@ -903,7 +915,11 @@ pub fn clear_system_proxy() -> AppResult<()> {
 ///
 /// Best-effort: returns `Err` on any failure (missing fields, netsh
 /// not available, etc.) — the caller logs the error and continues.
-async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
+async fn set_tun_dns_from_config(
+    manager: &ProcessManager,
+    run_id: u64,
+    config_path: &Path,
+) -> Result<(), String> {
     #[cfg(windows)]
     {
         let content = tokio::fs::read_to_string(config_path)
@@ -940,6 +956,12 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
             .unwrap_or("singbox-tun")
             .to_string();
 
+        // The config read above may have awaited long enough for this run to
+        // be replaced. Validate ownership immediately before mutating DNS.
+        if !manager.is_active_singbox_run(run_id).await {
+            return Err("stale TUN DNS setup".to_string());
+        }
+
         // `netsh interface ip set dns "<iface>" static <ip> primary`
         // requires elevation. The whole app is already running as
         // admin (TUN needs it), so this should just work.
@@ -973,7 +995,7 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
 
     #[cfg(not(windows))]
     {
-        let _ = config_path;
+        let _ = (manager, run_id, config_path);
         Ok(())
     }
 }
@@ -1243,6 +1265,25 @@ mod engine_runtime_tests {
         assert_eq!(status.status, Status::Running);
         assert_eq!(status.engine, Some(EngineKind::Xray));
         assert_eq!(status.profile_key.as_deref(), Some("newer"));
+    }
+
+    #[tokio::test]
+    async fn dns_ownership_gate_rejects_stale_or_non_singbox_runs() {
+        let pm = ProcessManager::new();
+        pm.active_run_id.store(7, Ordering::Release);
+        {
+            let mut status = pm.status.lock().await;
+            status.status = Status::Running;
+            status.engine = Some(EngineKind::Singbox);
+        }
+        assert!(pm.is_active_singbox_run(7).await);
+
+        pm.active_run_id.store(8, Ordering::Release);
+        assert!(!pm.is_active_singbox_run(7).await);
+
+        pm.active_run_id.store(8, Ordering::Release);
+        pm.status.lock().await.engine = Some(EngineKind::Xray);
+        assert!(!pm.is_active_singbox_run(8).await);
     }
 
     #[tokio::test]
