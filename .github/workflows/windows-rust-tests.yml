@@ -52,11 +52,48 @@ jobs:
             throw 'Could not locate src-tauri\target\debug\deps\cloakwire_lib-*.exe after cargo test --no-run.'
           }
 
-          Write-Host "Launching test binary: $($test.FullName)"
+          Write-Host "Launching test binary: $($test.Name)"
           $started = (Get-Date).ToUniversalTime()
+          $cdb = Get-Command cdb.exe -ErrorAction SilentlyContinue
+          $sanitize = {
+            param([string] $line)
+            $line = $line -replace '(?i)(?:[a-z]:\\|\\\\)[^\s"'']*\\([^\\\s"'']+\.dll)\b', '<path>\\$1'
+            $line = $line -replace '(?i)(?:[a-z]:\\|\\\\)[^\s"'']*', '<path>'
+            $line = $line -replace '(?i)https?://[^\s"'']+', '<url>'
+            $line = $line -replace '\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b', '<endpoint>'
+            $line -replace '(?i)\b(token|hwid|uuid|config(?:uration)?|subscription|server)\S*', '<redacted>'
+          }
+          $loaderLine = {
+            param([string] $line)
+            $line -match '(?i)(entry point|procedure|module|dll|STATUS_ENTRYPOINT_NOT_FOUND|0xc0000139)'
+          }
 
-          & $test.FullName --nocapture
+          if ($cdb) {
+            Write-Host 'CDB is available; launching one diagnostic copy under a temporary debugger.'
+            $transcript = & $cdb.Source -g -G -c 'g; q' $test.FullName --nocapture 2>&1
+
+            $safeLines = $transcript |
+              ForEach-Object { & $sanitize $_.ToString() } |
+              Where-Object { & $loaderLine $_ } |
+              Select-Object -Unique
+
+            Write-Host '--- CDB loader diagnostic (sanitized) ---'
+            if ($safeLines) {
+              $safeLines | ForEach-Object { Write-Host $_ }
+            }
+            else {
+              Write-Host 'No sanitized loader identity was emitted by CDB.'
+            }
+            Write-Host '--- End CDB loader diagnostic ---'
+          }
+          else {
+            Write-Warning 'cdb.exe is not installed on this runner; skipped the debugger diagnostic.'
+          }
+
+          # Run the real test invocation separately so the job always preserves its exact exit code.
+          $testOutput = & $test.FullName --nocapture 2>&1
           $testExit = $LASTEXITCODE
+          Write-Host "Test binary exit code: $testExit"
 
           if (Get-Command Get-WinEvent -ErrorAction SilentlyContinue) {
             $namePattern = [regex]::Escape($test.Name)
@@ -85,11 +122,21 @@ jobs:
               Sort-Object TimeCreated -Descending -Unique
 
             if ($matching) {
-              Write-Host '--- Windows launch diagnostic ---'
-              $matching |
+              $eventLines = $matching |
                 Format-List TimeCreated, LogName, ProviderName, Id, LevelDisplayName, Message |
                 Out-String -Width 240 |
-                Write-Host
+                ForEach-Object { $_ -split "`r?`n" } |
+                ForEach-Object { & $sanitize $_ } |
+                Where-Object { & $loaderLine $_ } |
+                Select-Object -Unique
+
+              Write-Host '--- Windows launch diagnostic (sanitized) ---'
+              if ($eventLines) {
+                $eventLines | ForEach-Object { Write-Host $_ }
+              }
+              else {
+                Write-Host 'No sanitized loader identity was present in matching event-log records.'
+              }
               Write-Host '--- End Windows launch diagnostic ---'
             }
             else {
