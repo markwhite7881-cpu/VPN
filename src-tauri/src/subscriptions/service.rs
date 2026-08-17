@@ -87,12 +87,14 @@ impl SubscriptionService {
             .iter()
             .filter(|record| record.kind == SubscriptionKind::LinkList)
             .flat_map(|record| {
-                record.link_outbounds.iter().enumerate().map(move |(index, _)| {
-                    super::SubscriptionLinkRef {
+                record
+                    .link_outbounds
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, _)| super::SubscriptionLinkRef {
                         subscription_id: record.id.clone(),
                         link_key: format!("index-{index}"),
-                    }
-                })
+                    })
             })
             .collect::<Vec<_>>();
         resolve_link_refs_from_records(&records, &refs)
@@ -392,15 +394,22 @@ fn resolve_link_refs_from_records(
     let mut seen = HashSet::new();
     let mut outbounds = Vec::with_capacity(refs.len());
     for reference in refs {
-        if !seen.insert((reference.subscription_id.as_str(), reference.link_key.as_str())) {
-            return Err(AppError::Validation("duplicate subscription link selection".into()));
+        if !seen.insert((
+            reference.subscription_id.as_str(),
+            reference.link_key.as_str(),
+        )) {
+            return Err(AppError::Validation(
+                "duplicate subscription link selection".into(),
+            ));
         }
         let record = records
             .iter()
             .find(|record| record.id == reference.subscription_id)
             .ok_or_else(|| AppError::Subscription("subscription was not found".into()))?;
         if record.kind != SubscriptionKind::LinkList {
-            return Err(AppError::Validation("subscription does not contain links".into()));
+            return Err(AppError::Validation(
+                "subscription does not contain links".into(),
+            ));
         }
         let index = reference
             .link_key

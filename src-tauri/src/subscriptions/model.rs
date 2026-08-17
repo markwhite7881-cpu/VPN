@@ -134,13 +134,23 @@ impl fmt::Debug for SubscriptionRecord {
             .field("engine", &self.engine)
             .field("interval_minutes", &self.interval_minutes)
             .field("active_child_key", &self.active_child_key)
-            .field("children", &self.children.iter().map(ChildProfileRecord::to_summary).collect::<Vec<_>>())
+            .field(
+                "children",
+                &self
+                    .children
+                    .iter()
+                    .map(ChildProfileRecord::to_summary)
+                    .collect::<Vec<_>>(),
+            )
             .field("link_count", &self.link_outbounds.len())
             .field("bundle_digest", &self.bundle_digest)
             .field("metadata", &self.metadata)
             .field("last_success_at", &self.last_success_at)
             .field("last_http_status", &self.last_http_status)
-            .field("last_error", &self.last_error.as_ref().map(SubscriptionFailure::to_safe))
+            .field(
+                "last_error",
+                &self.last_error.as_ref().map(SubscriptionFailure::to_safe),
+            )
             .finish()
     }
 }
@@ -157,7 +167,6 @@ impl fmt::Debug for ChildProfileRecord {
             .finish()
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ProviderMetadata {

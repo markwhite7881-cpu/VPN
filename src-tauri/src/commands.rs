@@ -158,15 +158,16 @@ pub async fn start_managed_singbox(
     let outbounds = deduplicate_outbounds(outbounds)?;
     let value = config::Config::build(&outbounds, &input.settings);
     let body = serde_json::to_vec_pretty(&value).map_err(AppError::Serde)?;
-    let dir = app.path().temp_dir().unwrap_or_else(|_| std::env::temp_dir());
+    let dir = app
+        .path()
+        .temp_dir()
+        .unwrap_or_else(|_| std::env::temp_dir());
     std::fs::create_dir_all(&dir).map_err(AppError::Io)?;
     let path = dir.join("config.managed.json");
     std::fs::write(&path, body).map_err(AppError::Io)?;
     let controller_url = format!("http://{}", input.settings.clash_api.external_controller);
     let binary = ProcessManager::locate_binary(&app)?;
-    let status = pm
-        .start(&app, &binary, &path, Some(controller_url))
-        .await?;
+    let status = pm.start(&app, &binary, &path, Some(controller_url)).await?;
     Ok(ManagedLaunchResult {
         status,
         config_path: path.display().to_string(),
@@ -908,8 +909,12 @@ mod managed_launch_tests {
         .unwrap();
 
         assert_eq!(unique.len(), 2);
-        assert!(matches!(unique[0], Outbound::Unsupported { ref raw, .. } if raw == "manual-first"));
-        assert!(matches!(unique[1], Outbound::Unsupported { ref raw, .. } if raw == "subscription-second"));
+        assert!(
+            matches!(unique[0], Outbound::Unsupported { ref raw, .. } if raw == "manual-first")
+        );
+        assert!(
+            matches!(unique[1], Outbound::Unsupported { ref raw, .. } if raw == "subscription-second")
+        );
     }
 }
 

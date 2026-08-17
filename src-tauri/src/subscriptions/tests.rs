@@ -64,26 +64,69 @@ async fn opaque_link_refs_resolve_and_reject_invalid_selection() {
     )
     .unwrap();
     let record = SubscriptionRecord {
-        id: "sub-opaque".into(), name: "Provider".into(), url: "https://example.test".into(),
-        kind: SubscriptionKind::LinkList, engine: Some(super::EngineKind::Singbox), interval_minutes: 60,
-        active_child_key: None, children: Vec::new(), link_outbounds: vec![link], bundle_digest: None,
-        metadata: Default::default(), last_success_at: None, last_http_status: Some(200), last_error: None,
+        id: "sub-opaque".into(),
+        name: "Provider".into(),
+        url: "https://example.test".into(),
+        kind: SubscriptionKind::LinkList,
+        engine: Some(super::EngineKind::Singbox),
+        interval_minutes: 60,
+        active_child_key: None,
+        children: Vec::new(),
+        link_outbounds: vec![link],
+        bundle_digest: None,
+        metadata: Default::default(),
+        last_success_at: None,
+        last_http_status: Some(200),
+        last_error: None,
     };
     super::SubscriptionStore::new(directory.path().join("subscriptions.json"))
-        .replace_all(&[record]).unwrap();
+        .replace_all(&[record])
+        .unwrap();
     let service = SubscriptionService::new(
         SubscriptionStore::new(directory.path().join("subscriptions.json")),
-        HwidStore::new(directory.path().join("device-id")), SubscriptionHttpClient::new().unwrap(), "1.3.0".into(),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
     );
-    let resolved = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-0".into() }]).await.unwrap();
+    let resolved = service
+        .resolve_link_refs(&[SubscriptionLinkRef {
+            subscription_id: "sub-opaque".into(),
+            link_key: "index-0".into(),
+        }])
+        .await
+        .unwrap();
     assert!(matches!(resolved.first(), Some(Outbound::Vless(_))));
-    let stale = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-9".into() }]).await;
+    let stale = service
+        .resolve_link_refs(&[SubscriptionLinkRef {
+            subscription_id: "sub-opaque".into(),
+            link_key: "index-9".into(),
+        }])
+        .await;
     assert!(matches!(stale, Err(AppError::Validation(_))));
     for invalid_key in ["index-00", "index-01", "index-+1", "index--1", "index-"] {
-        let invalid = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: invalid_key.into() }]).await;
-        assert!(matches!(invalid, Err(AppError::Validation(_))), "{invalid_key} must be rejected");
+        let invalid = service
+            .resolve_link_refs(&[SubscriptionLinkRef {
+                subscription_id: "sub-opaque".into(),
+                link_key: invalid_key.into(),
+            }])
+            .await;
+        assert!(
+            matches!(invalid, Err(AppError::Validation(_))),
+            "{invalid_key} must be rejected"
+        );
     }
-    let duplicate = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-0".into() }; 2]).await;
+    let duplicate = service
+        .resolve_link_refs(&[
+            SubscriptionLinkRef {
+                subscription_id: "sub-opaque".into(),
+                link_key: "index-0".into(),
+            },
+            SubscriptionLinkRef {
+                subscription_id: "sub-opaque".into(),
+                link_key: "index-0".into(),
+            },
+        ])
+        .await;
     assert!(matches!(duplicate, Err(AppError::Validation(_))));
 }
 

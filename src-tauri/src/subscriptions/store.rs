@@ -132,10 +132,12 @@ impl SubscriptionStore {
 
     pub fn load_all(&self) -> AppResult<Vec<SubscriptionRecord>> {
         match fs::read(&self.path) {
-            Ok(bytes) => Ok(serde_json::from_slice::<Vec<StoredSubscriptionRecord>>(&bytes)?
-                .into_iter()
-                .map(Into::into)
-                .collect()),
+            Ok(bytes) => Ok(
+                serde_json::from_slice::<Vec<StoredSubscriptionRecord>>(&bytes)?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(error.into()),
         }

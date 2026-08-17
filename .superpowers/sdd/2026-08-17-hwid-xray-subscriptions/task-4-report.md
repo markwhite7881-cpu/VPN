@@ -66,3 +66,25 @@ Implemented and committed the amended Task 4 backend-first opaque link-list rout
 - Added `ConnectionProfile` frontend union. Manual outbounds retain existing behavior, while subscription entries carry only an opaque reference, label, and protocol. GeoIP, latency, config, and routing hooks receive manual profiles only.
 - `managedSelectionForProfile` sends all backend links for Auto, exactly one opaque ref for an explicit subscription, and no subscription ref for a manual selection. Focused tests cover manual-first ordering, both selection modes, and legacy localStorage migration success/failure.
 - Fresh verifier-round validation: `npm test` PASS (4/4), `npm run build` PASS (existing Vite chunk-size warning only), and `git diff --check` PASS. Rust formatting and focused tests remain blocked because the Cargo probe returned `CARGO_UNAVAILABLE`.
+
+## Round 4 verifier follow-up
+
+### Changes
+- Replaced the invalid non-`Copy` repeat-array expression in `src-tauri/src/subscriptions/tests.rs` with two explicit `SubscriptionLinkRef` values. The duplicate-reference rejection assertion remains unchanged.
+- Applied `cargo fmt` output only to the verifier-reviewed Rust files: `src-tauri/src/commands.rs`, `src-tauri/src/subscriptions/model.rs`, `src-tauri/src/subscriptions/service.rs`, `src-tauri/src/subscriptions/store.rs`, and `src-tauri/src/subscriptions/tests.rs`.
+- Restored generated `tsconfig.tsbuildinfo` after frontend validation; it is not part of this change.
+
+### Commands and observed results
+- `C:\Users\Алексей\.cargo\bin\cargo.exe test --manifest-path src-tauri\Cargo.toml opaque_link_refs_resolve_and_reject_invalid_selection --lib --no-run`: RED as reported by the verifier — `E0277`, `SubscriptionLinkRef: Copy` was required by the repeat-array expression at `tests.rs:86`.
+- `C:\Users\Алексей\.cargo\bin\cargo.exe fmt --manifest-path src-tauri\Cargo.toml`: PASS.
+- `C:\Users\Алексей\.cargo\bin\cargo.exe fmt --manifest-path src-tauri\Cargo.toml -- --check`: PASS.
+- `C:\Users\Алексей\.cargo\bin\cargo.exe test --manifest-path src-tauri\Cargo.toml opaque_link_refs_resolve_and_reject_invalid_selection --lib`: PASS — 1 passed, 0 failed.
+- `C:\Users\Алексей\.cargo\bin\cargo.exe test --manifest-path src-tauri\Cargo.toml --lib subscriptions::tests -- --nocapture`: PASS — 15 passed, 0 failed.
+- `C:\Users\Алексей\.cargo\bin\cargo.exe test --manifest-path src-tauri\Cargo.toml --lib -- --nocapture`: PASS — 130 passed, 0 failed; no UAC/example baseline issue occurred.
+- `npm.cmd test`: PASS — 1 file, 5 tests.
+- `npm.cmd run build`: PASS — Vite production build completed; existing chunk-size warning only.
+- `git diff --check`: PASS.
+
+### Remaining concerns
+- None from this verifier follow-up; the explicit Cargo toolchain was available and all requested Rust, frontend, and whitespace validation passed.
+
