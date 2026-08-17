@@ -59,6 +59,7 @@ pub fn merge_routing(
 
     let mut translated = Vec::new();
     let mut applicability = RoutingApplicability::default();
+    add_simple_process_applicability(&mut applicability, routing);
     let mut needs_block = false;
     for rule in routing.rules.iter().filter(|rule| is_enabled(rule)) {
         let rule_id = rule_id(rule);
@@ -72,12 +73,12 @@ pub fn merge_routing(
         ) {
             Ok(TranslatedRule::Rule(rule)) => {
                 applicability.applied_rule_ids.push(rule_id);
-                translated.push(rule);
+                translated.push(TranslatedRule::Rule(rule));
             }
             Ok(TranslatedRule::Reject(rule)) => {
                 applicability.applied_rule_ids.push(rule_id);
                 needs_block |= blackhole_tag.is_none();
-                translated.push(rule);
+                translated.push(TranslatedRule::Reject(rule));
             }
             Err(reason) => applicability.unavailable.push(UnavailableRule {
                 rule_id,
@@ -89,9 +90,9 @@ pub fn merge_routing(
 
     let block_tag = blackhole_tag.unwrap_or_else(|| BLOCK_TAG.into());
     for rule in &mut translated {
-        if rule.get("outboundTag") == Some(&Value::String(BLOCK_TAG.into())) {
+        if let TranslatedRule::Reject(rule) = rule {
             rule.as_object_mut()
-                .expect("translated rule")
+                .expect("translated reject rule")
                 .insert("outboundTag".into(), Value::String(block_tag.clone()));
         }
     }
@@ -106,6 +107,13 @@ pub fn merge_routing(
             .ok_or_else(|| AppError::UnsafeConfig("Xray outbounds must be an array".into()))?
             .push(serde_json::json!({"tag": BLOCK_TAG, "protocol": "blackhole"}));
     }
+
+    let mut translated = translated
+        .into_iter()
+        .map(|translated| match translated {
+            TranslatedRule::Rule(rule) | TranslatedRule::Reject(rule) => rule,
+        })
+        .collect::<Vec<_>>();
 
     if translated.is_empty() {
         return Ok(RoutingPreparation {
@@ -230,6 +238,31 @@ fn translate_rule(
     }
 }
 
+fn add_simple_process_applicability(
+    applicability: &mut RoutingApplicability,
+    routing: &RoutingOptions,
+) {
+    for (processes, rule_id, label) in [
+        (
+            &routing.direct_processes,
+            "simple-direct-processes",
+            "Direct process routing",
+        ),
+        (
+            &routing.vpn_processes,
+            "simple-vpn-processes",
+            "VPN process routing",
+        ),
+    ] {
+        if !processes.is_empty() {
+            applicability.unavailable.push(UnavailableRule {
+                rule_id: rule_id.into(),
+                label: label.into(),
+                reason: UnavailableReason::ProcessMatcher,
+            });
+        }
+    }
+}
 fn provider_tags(root: &Map<String, Value>, key: &str) -> AppResult<HashSet<String>> {
     root.get(key)
         .map(tags_from_array)
@@ -533,6 +566,61 @@ mod tests {
             prepared.value["routing"]["rules"][0]["balancerTag"],
             "leastPing"
         );
+    }
+
+    #[test]
+    fn preserves_explicit_cloakwire_block_outbound_when_provider_has_a_different_blackhole() {
+        let provider = json!({
+            "outbounds": [
+                {"tag": "cloakwire-block", "protocol": "vless"},
+                {"tag": "provider-blackhole", "protocol": "blackhole"}
+            ]
+        });
+        let mut routing = RoutingOptions::default();
+        routing.rules = vec![
+            json!({"id":"explicit-block","enabled":true,"matchers":{"domain":["route.example"]},"action":{"kind":"route","outbound":"cloakwire-block"}}),
+            json!({"id":"reject","enabled":true,"matchers":{"domain":["reject.example"]},"action":{"kind":"reject"}}),
+        ];
+
+        let prepared = merge_routing(provider, &routing).unwrap();
+
+        assert_eq!(
+            prepared.value["routing"]["rules"][0]["outboundTag"],
+            "cloakwire-block"
+        );
+        assert_eq!(
+            prepared.value["routing"]["rules"][1]["outboundTag"],
+            "provider-blackhole"
+        );
+        assert_eq!(prepared.value["outbounds"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn reports_nonempty_simple_process_settings_as_unavailable_without_process_values() {
+        let provider = json!({"outbounds":[{"tag":"proxy","protocol":"vless"}]});
+        let mut routing = RoutingOptions::default();
+        routing.vpn_processes = vec!["C:\\Users\\private\\vpn.exe".into()];
+        routing.direct_processes = vec!["C:\\Users\\private\\bank.exe".into()];
+
+        let prepared = merge_routing(provider, &routing).unwrap();
+
+        assert_eq!(
+            prepared.applicability.unavailable,
+            vec![
+                super::UnavailableRule {
+                    rule_id: "simple-direct-processes".into(),
+                    label: "Direct process routing".into(),
+                    reason: super::UnavailableReason::ProcessMatcher,
+                },
+                super::UnavailableRule {
+                    rule_id: "simple-vpn-processes".into(),
+                    label: "VPN process routing".into(),
+                    reason: super::UnavailableReason::ProcessMatcher,
+                },
+            ]
+        );
+        let rendered = format!("{:?}", prepared.applicability);
+        assert!(!rendered.contains("C:\\Users\\private"));
     }
 
     #[test]
