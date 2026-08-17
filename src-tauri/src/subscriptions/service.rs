@@ -133,33 +133,39 @@ impl SubscriptionService {
     }
 
     pub async fn add(&self, input: AddSubscriptionInput) -> AppResult<RefreshSubscriptionResult> {
-        let _guard = self.lock.lock().await;
         validate_input(&input.name, &input.url, input.interval_minutes)?;
-        let records = self.store.load_all()?;
-        if records
-            .iter()
-            .any(|record| normalized_url_digest(&record.url) == normalized_url_digest(&input.url))
-        {
-            return Err(AppError::Subscription("subscription already exists".into()));
-        }
-
-        let record = SubscriptionRecord {
-            id: Uuid::new_v4().to_string(),
-            name: input.name.trim().to_owned(),
-            url: input.url.trim().to_owned(),
-            kind: SubscriptionKind::Auto,
-            engine: None,
-            interval_minutes: input.interval_minutes,
-            active_child_key: None,
-            children: Vec::new(),
-            link_outbounds: Vec::new(),
-            bundle_digest: None,
-            metadata: ProviderMetadata::default(),
-            last_success_at: None,
-            last_http_status: None,
-            last_error: None,
+        let (record, records) = {
+            let _guard = self.lock.lock().await;
+            let records = self.store.load_all()?;
+            if records.iter().any(|record| {
+                normalized_url_digest(&record.url) == normalized_url_digest(&input.url)
+            }) {
+                return Err(AppError::Subscription("subscription already exists".into()));
+            }
+            let record = SubscriptionRecord {
+                id: Uuid::new_v4().to_string(),
+                name: input.name.trim().to_owned(),
+                url: input.url.trim().to_owned(),
+                kind: SubscriptionKind::Auto,
+                engine: None,
+                interval_minutes: input.interval_minutes,
+                active_child_key: None,
+                children: Vec::new(),
+                link_outbounds: Vec::new(),
+                bundle_digest: None,
+                metadata: ProviderMetadata::default(),
+                last_success_at: None,
+                last_http_status: None,
+                last_error: None,
+            };
+            (record, records)
         };
         let candidate = self.prepare_candidate(&record).await?;
+        let _guard = self.lock.lock().await;
+        let current = self.store.load_all()?;
+        if current != records {
+            return Err(concurrent_change());
+        }
         let result = RefreshSubscriptionResult {
             subscription: candidate.to_summary(),
             selection_changed: false,
@@ -212,14 +218,26 @@ impl SubscriptionService {
     }
 
     pub async fn refresh(&self, id: &str) -> AppResult<RefreshSubscriptionResult> {
+        let original = {
+            let _guard = self.lock.lock().await;
+            let records = self.store.load_all()?;
+            records
+                .iter()
+                .find(|record| record.id == id)
+                .cloned()
+                .ok_or_else(not_found)?
+        };
+        let candidate = self.prepare_candidate(&original).await?;
         let _guard = self.lock.lock().await;
         let mut records = self.store.load_all()?;
         let index = records
             .iter()
             .position(|record| record.id == id)
             .ok_or_else(not_found)?;
-        let candidate = self.prepare_candidate(&records[index]).await?;
-        let selection_changed = candidate.active_child_key != records[index].active_child_key;
+        if records[index] != original {
+            return Err(concurrent_change());
+        }
+        let selection_changed = candidate.active_child_key != original.active_child_key;
         let result = RefreshSubscriptionResult {
             subscription: candidate.to_summary(),
             selection_changed,
@@ -233,8 +251,11 @@ impl SubscriptionService {
         &self,
         inputs: Vec<LegacySubscriptionInput>,
     ) -> AppResult<SubscriptionSnapshot> {
-        let _guard = self.lock.lock().await;
-        let mut records = self.store.load_all()?;
+        let (mut records, original) = {
+            let _guard = self.lock.lock().await;
+            let records = self.store.load_all()?;
+            (records.clone(), records)
+        };
         for input in inputs {
             validate_input(&input.name, &input.url, input.interval_minutes)?;
             if records.iter().any(|record| record.id == input.id)
@@ -261,6 +282,10 @@ impl SubscriptionService {
                 last_error: None,
             };
             records.push(self.prepare_candidate(&record).await?);
+        }
+        let _guard = self.lock.lock().await;
+        if self.store.load_all()? != original {
+            return Err(concurrent_change());
         }
         self.store.replace_all(&records)?;
         Ok(snapshot(records))
@@ -509,6 +534,10 @@ fn record_mut<'a>(
         .iter_mut()
         .find(|record| record.id == id)
         .ok_or_else(not_found)
+}
+
+fn concurrent_change() -> AppError {
+    AppError::Subscription("subscription state changed during refresh".into())
 }
 
 fn not_found() -> AppError {

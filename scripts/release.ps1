@@ -28,11 +28,13 @@ $StagePath = Join-Path $DistRoot "v$Version"
 $ManifestPath = Join-Path $StagePath 'latest.json'
 $ManifestWriter = Join-Path $PSScriptRoot 'write-latest-json.ps1'
 $Validator = Join-Path $PSScriptRoot 'validate-release.ps1'
+$PrepareXray = Join-Path $PSScriptRoot 'prepare-xray-sidecar.ps1'
+$TestXray = Join-Path $PSScriptRoot 'test-xray-sidecar.ps1'
 $BuildTarget = Join-Path $DistRoot ('.build-v{0}-{1}' -f $Version, [Guid]::NewGuid().ToString('N'))
 $NsisDir = Join-Path $BuildTarget 'release\bundle\nsis'
 $ExpectedArtifactName = "Cloakwire_$Version`_x64-setup.exe"
 
-foreach ($required in @($SignerExe, $KeyPath, $ManifestWriter, $Validator)) {
+foreach ($required in @($SignerExe, $KeyPath, $ManifestWriter, $Validator, $PrepareXray, $TestXray)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required release input is missing: $required"
     }
@@ -52,6 +54,8 @@ New-Item -ItemType Directory -Path $BuildTarget | Out-Null
 try {
     Push-Location $ProjectRoot
     try {
+        & $PrepareXray -StagingRoot (Join-Path $DistRoot '.xray-staging')
+        & $TestXray
         $env:CARGO_TARGET_DIR = $BuildTarget
         # Tauri's Node CLI writes ordinary progress messages to stderr. Launch
         # it as a child process, then gate on its actual exit code rather than

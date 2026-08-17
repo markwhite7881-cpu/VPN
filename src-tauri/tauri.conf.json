@@ -40,7 +40,8 @@
       "icons/icon.icns"
     ],
     "externalBin": [
-      "binaries/sing-box"
+      "binaries/sing-box",
+      "binaries/xray"
     ],
     "category": "Utility",
     "shortDescription": "Cloakwire VPN client",
