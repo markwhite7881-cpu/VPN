@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub mod singbox;
+pub mod xray;
 
 pub use crate::subscriptions::EngineKind;
 

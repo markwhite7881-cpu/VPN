@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::config::{self, GeneratorSettings};
-use crate::engine::{singbox, EngineKind, LaunchSpec};
+use crate::engine::{singbox, xray, EngineKind, LaunchSpec};
 use crate::error::{AppError, AppResult};
 use crate::parser::{self, Outbound};
 use crate::process::{LogLine, ProcessManager, StatusReport};
@@ -119,6 +119,14 @@ pub struct ManagedLaunchInput {
     pub subscription_links: Option<Vec<crate::subscriptions::SubscriptionLinkRef>>,
     pub select_all_subscription_links: bool,
     pub settings: GeneratorSettings,
+    #[serde(default)]
+    pub profile: Option<ManagedProfileInput>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ManagedProfileInput {
+    pub subscription_id: String,
+    pub child_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -137,6 +145,54 @@ pub async fn start_managed_singbox(
     subscriptions: State<'_, Arc<SubscriptionService>>,
     input: ManagedLaunchInput,
 ) -> AppResult<ManagedLaunchResult> {
+    if let Some(profile) = input.profile {
+        let profile = subscriptions
+            .resolve_child_profile(&profile.subscription_id, &profile.child_key)
+            .await?;
+        let dir = app
+            .path()
+            .temp_dir()
+            .unwrap_or_else(|_| std::env::temp_dir());
+        std::fs::create_dir_all(&dir).map_err(AppError::Io)?;
+        let path = dir.join("config.managed.profile.json");
+        let body = serde_json::to_vec_pretty(&profile.config).map_err(AppError::Serde)?;
+        std::fs::write(&path, body).map_err(AppError::Io)?;
+        let (binary, args, controller_url) = match profile.engine {
+            EngineKind::Singbox => (
+                singbox::locate_binary(&app)?,
+                singbox::run_args(&path).to_vec(),
+                Some(format!(
+                    "http://{}",
+                    input.settings.clash_api.external_controller
+                )),
+            ),
+            EngineKind::Xray => (
+                xray::locate_binary(&app)?,
+                xray::run_args(&path).to_vec(),
+                None,
+            ),
+        };
+        let status = pm
+            .start_spec_with_app(
+                Some(&app),
+                LaunchSpec {
+                    engine: profile.engine,
+                    binary,
+                    args,
+                    config_path: path.clone(),
+                    controller_url,
+                    profile_key: Some(profile.key),
+                    profile_name: Some(profile.name),
+                },
+            )
+            .await?;
+        return Ok(ManagedLaunchResult {
+            status,
+            config_path: path.display().to_string(),
+            profile_count: 1,
+        });
+    }
+
     let mut outbounds = input.manual_outbounds;
     let subscription_outbounds = if input.select_all_subscription_links {
         subscriptions.resolve_all_links().await?

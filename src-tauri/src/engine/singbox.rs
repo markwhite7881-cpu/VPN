@@ -70,6 +70,14 @@ pub fn locate_binary(app: &AppHandle) -> AppResult<PathBuf> {
     )))
 }
 
+pub fn run_args(config_path: &Path) -> [std::ffi::OsString; 3] {
+    [
+        "run".into(),
+        "-c".into(),
+        config_path.as_os_str().to_os_string(),
+    ]
+}
+
 pub fn check_args(config_path: &Path) -> [&std::ffi::OsStr; 3] {
     ["check".as_ref(), "-c".as_ref(), config_path.as_os_str()]
 }

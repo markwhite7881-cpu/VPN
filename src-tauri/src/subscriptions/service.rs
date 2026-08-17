@@ -34,6 +34,14 @@ pub struct LegacySubscriptionInput {
     pub interval_minutes: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedChildProfile {
+    pub key: String,
+    pub name: String,
+    pub engine: EngineKind,
+    pub config: serde_json::Value,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RefreshSubscriptionResult {
     pub subscription: SubscriptionSummary,
@@ -78,6 +86,30 @@ impl SubscriptionService {
         let _guard = self.lock.lock().await;
         let records = self.store.load_all()?;
         resolve_link_refs_from_records(&records, refs)
+    }
+
+    pub async fn resolve_child_profile(
+        &self,
+        subscription_id: &str,
+        child_key: &str,
+    ) -> AppResult<ResolvedChildProfile> {
+        let _guard = self.lock.lock().await;
+        let records = self.store.load_all()?;
+        let record = records
+            .iter()
+            .find(|record| record.id == subscription_id)
+            .ok_or_else(not_found)?;
+        let child = record
+            .children
+            .iter()
+            .find(|child| child.key == child_key)
+            .ok_or_else(not_found)?;
+        Ok(ResolvedChildProfile {
+            key: child.key.clone(),
+            name: child.name.clone(),
+            engine: child.engine,
+            config: child.config.clone(),
+        })
     }
 
     pub async fn resolve_all_links(&self) -> AppResult<Vec<crate::parser::Outbound>> {

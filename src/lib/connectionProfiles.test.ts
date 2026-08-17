@@ -49,7 +49,7 @@ describe("connection profile selection", () => {
     ]);
   });
 
-  it("keeps ready-config children safe and non-executable", () => {
+  it("passes ready-config children through the backend-owned engine path", () => {
     const profiles = buildConnectionProfiles(manual, {
       subscriptions: [
         {
@@ -71,7 +71,11 @@ describe("connection profile selection", () => {
       { kind: "subscription", reference: { subscription_id: "sub-a", link_key: "index-1" }, label: "trojan link 2", protocol: "trojan" },
       { kind: "ready_config", subscriptionId: "sub-b", key: "index-0", name: "Primary", engine: "xray" },
     ]);
-    expect(managedSelectionForProfile(manual, profiles, 4)).toBeNull();
+    expect(managedSelectionForProfile(manual, profiles, 4)).toEqual({
+      manualOutbounds: manual,
+      selectAllSubscriptionLinks: false,
+      profile: { subscription_id: "sub-b", child_key: "index-0" },
+    });
   });
 
   it("uses all links for Auto and one opaque reference for an explicit subscription", () => {

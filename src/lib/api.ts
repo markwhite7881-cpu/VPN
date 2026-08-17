@@ -62,7 +62,7 @@ export const api = {
   stopConnection: () => call<StatusReport>("stop_connection"),
   start: (configPath: string) =>
     call<StatusReport>("start_singbox", { configPath }),
-  startManaged: (input: { manualOutbounds: Outbound[]; subscriptionLinks?: SubscriptionLinkRef[]; selectAllSubscriptionLinks: boolean; settings: GeneratorSettings }) =>
+  startManaged: (input: { manualOutbounds: Outbound[]; subscriptionLinks?: SubscriptionLinkRef[]; selectAllSubscriptionLinks: boolean; profile?: { subscription_id: string; child_key: string }; settings: GeneratorSettings }) =>
     call<ManagedLaunchResult>("start_managed_singbox", { input }),
   stop: () => call<StatusReport>("stop_singbox"),
   getStatus: () => call<StatusReport>("get_status"),

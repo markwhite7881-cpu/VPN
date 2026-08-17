@@ -19,6 +19,7 @@ pub use model::{
     SubscriptionSnapshot, SubscriptionSummary, SubscriptionUserinfo,
 };
 pub use service::{
-    AddSubscriptionInput, LegacySubscriptionInput, RefreshSubscriptionResult, SubscriptionService,
+    AddSubscriptionInput, LegacySubscriptionInput, RefreshSubscriptionResult, ResolvedChildProfile,
+    SubscriptionService,
 };
 pub use store::SubscriptionStore;

@@ -27,6 +27,7 @@ export type ManagedConnectionSelection = {
   manualOutbounds: Outbound[];
   subscriptionLinks?: SubscriptionLinkRef[];
   selectAllSubscriptionLinks: boolean;
+  profile?: { subscription_id: string; child_key: string };
 };
 
 /**
@@ -85,7 +86,7 @@ export function buildConnectionProfiles(
   return profiles;
 }
 
-/** A ready configuration is visible and selectable, but not executable in Task 4. */
+/** Ready configurations are executable through their backend-owned engine path. */
 export function canStartManagedSelection(
   profiles: ConnectionProfile[],
   selectedIndex: number,
@@ -94,7 +95,7 @@ export function canStartManagedSelection(
     return profiles.some((profile) => profile.kind !== "ready_config");
   }
   const selected = profiles[selectedIndex];
-  return !!selected && selected.kind !== "ready_config";
+  return !!selected;
 }
 
 /**
@@ -120,7 +121,13 @@ export function managedSelectionForProfile(
       selectAllSubscriptionLinks: false,
     };
   }
-  if (selected.kind === "ready_config") return null;
+  if (selected.kind === "ready_config") {
+    return {
+      manualOutbounds,
+      selectAllSubscriptionLinks: false,
+      profile: { subscription_id: selected.subscriptionId, child_key: selected.key },
+    };
+  }
   return {
     manualOutbounds,
     selectAllSubscriptionLinks: false,
