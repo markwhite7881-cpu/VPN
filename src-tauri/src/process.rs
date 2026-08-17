@@ -241,8 +241,7 @@ impl ProcessManager {
             Err(error) => {
                 self.abort_start(run_id).await;
                 return Err(AppError::Spawn(format!(
-                    "{}: {error}",
-                    spec.binary.display()
+                    "could not start sing-box process: {error}"
                 )));
             }
         };
@@ -413,10 +412,25 @@ impl ProcessManager {
     }
 
     pub async fn controller_url(&self) -> Option<String> {
-        if self.status.lock().await.engine != Some(EngineKind::Singbox) {
-            return None;
+        self.clash_controller().await.ok().map(|(_, url)| url)
+    }
+
+    /// Capture the controller URL together with the sing-box launch generation
+    /// that owns it. Callers must validate the generation again after I/O.
+    pub async fn clash_controller(&self) -> AppResult<(u64, String)> {
+        let run_id = self.active_run_id.load(Ordering::Acquire);
+        let status = self.status.lock().await;
+        if run_id == 0
+            || status.status != Status::Running
+            || status.engine != Some(EngineKind::Singbox)
+        {
+            return Err(AppError::Clash("sing-box is not running".to_string()));
         }
-        self.controller_url.lock().await.clone()
+        drop(status);
+        let url = self.controller_url.lock().await.clone().ok_or_else(|| {
+            AppError::Clash("sing-box controller is unavailable".to_string())
+        })?;
+        Ok((run_id, url))
     }
 
     /// Borrow the live traffic-stream handle (for the `traffic_*`
@@ -586,7 +600,7 @@ impl ProcessManager {
         run_id != 0 && self.active_run_id.load(Ordering::Acquire) == run_id
     }
 
-    async fn is_active_singbox_run(&self, run_id: u64) -> bool {
+    pub async fn is_active_singbox_run(&self, run_id: u64) -> bool {
         if self.active_run_id.load(Ordering::Acquire) != run_id {
             return false;
         }
@@ -1254,6 +1268,44 @@ fn is_linux_capability_name(capability: &str) -> bool {
 }
 
 #[cfg(test)]
+mod clash_controller_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn clash_controller_rejects_xray_runs() {
+        let manager = ProcessManager::new();
+        manager.active_run_id.store(1, Ordering::Release);
+        let mut status = manager.status.lock().await;
+        status.status = Status::Running;
+        status.engine = Some(EngineKind::Xray);
+        drop(status);
+        *manager.controller_url.lock().await = Some("http://127.0.0.1:9090".to_string());
+
+        let error = manager.clash_controller().await.unwrap_err();
+        assert!(error.to_string().contains("sing-box is not running"));
+    }
+
+    #[tokio::test]
+    async fn clash_controller_captures_generation_and_rejects_stale_generation() {
+        let manager = ProcessManager::new();
+        manager.active_run_id.store(7, Ordering::Release);
+        let mut status = manager.status.lock().await;
+        status.status = Status::Running;
+        status.engine = Some(EngineKind::Singbox);
+        drop(status);
+        *manager.controller_url.lock().await = Some("http://127.0.0.1:9090".to_string());
+
+        let (run_id, url) = manager.clash_controller().await.expect("controller available");
+        assert_eq!(run_id, 7);
+        assert_eq!(url, "http://127.0.0.1:9090");
+        assert!(manager.is_active_singbox_run(run_id).await);
+
+        manager.active_run_id.store(8, Ordering::Release);
+        assert!(!manager.is_active_singbox_run(run_id).await);
+    }
+}
+
+#[cfg(test)]
 mod reset_tests {
     use super::*;
 
@@ -1321,6 +1373,20 @@ mod engine_runtime_tests {
         assert_eq!(pm.controller_url().await, None);
         pm.stop().await.unwrap();
         assert_eq!(pm.controller_url().await, None);
+    }
+
+    #[tokio::test]
+    async fn spawn_failure_redacts_binary_path() {
+        let pm = Arc::new(ProcessManager::new());
+        let secret_path = PathBuf::from("/private/secret/sing-box");
+        let mut spec = test_xray_spec();
+        spec.binary = secret_path.clone();
+        spec.args.clear();
+
+        let error = pm.start_spec(spec).await.unwrap_err().to_string();
+
+        assert!(!error.contains(secret_path.to_string_lossy().as_ref()));
+        assert!(error.contains("could not start sing-box process"));
     }
 
     #[tokio::test]

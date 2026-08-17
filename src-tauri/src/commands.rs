@@ -465,16 +465,15 @@ pub async fn check_config_with_binary(
 
 // --- Clash API ---------------------------------------------------------
 
-async fn api_url(pm: &ProcessManager) -> AppResult<String> {
-    let status = pm.snapshot_status().await;
-    if status.engine != Some(EngineKind::Singbox) {
-        return Err(AppError::Clash("sing-box is not running".to_string()));
-    }
-    match pm.controller_url().await {
-        Some(url) => Ok(url),
-        None => Err(AppError::Clash(
-            "sing-box controller is unavailable".to_string(),
-        )),
+async fn api_url(pm: &ProcessManager) -> AppResult<(u64, String)> {
+    pm.clash_controller().await
+}
+
+async fn ensure_clash_run(pm: &ProcessManager, run_id: u64) -> AppResult<()> {
+    if pm.is_active_singbox_run(run_id).await {
+        Ok(())
+    } else {
+        Err(AppError::Clash("sing-box is no longer running".to_string()))
     }
 }
 
@@ -482,9 +481,11 @@ async fn api_url(pm: &ProcessManager) -> AppResult<String> {
 pub async fn list_proxies(
     pm: State<'_, Arc<ProcessManager>>,
 ) -> AppResult<crate::clash_api::ProxiesResponse> {
-    let base = api_url(&pm).await?;
+    let (run_id, base) = api_url(&pm).await?;
     let client = crate::clash_api::Client::new();
-    client.list_proxies(&base).await
+    let response = client.list_proxies(&base).await?;
+    ensure_clash_run(&pm, run_id).await?;
+    Ok(response)
 }
 
 #[tauri::command]
@@ -493,9 +494,11 @@ pub async fn select_proxy(
     group: String,
     member: String,
 ) -> AppResult<()> {
-    let base = api_url(&pm).await?;
+    let (run_id, base) = api_url(&pm).await?;
+    ensure_clash_run(&pm, run_id).await?;
     let client = crate::clash_api::Client::new();
-    client.select_proxy(&base, &group, &member).await
+    client.select_proxy(&base, &group, &member).await?;
+    ensure_clash_run(&pm, run_id).await
 }
 
 #[tauri::command]
@@ -504,11 +507,13 @@ pub async fn test_delay(
     name: String,
     timeout_ms: Option<u32>,
 ) -> AppResult<Option<u32>> {
-    let base = api_url(&pm).await?;
+    let (run_id, base) = api_url(&pm).await?;
     let client = crate::clash_api::Client::new();
-    client
+    let result = client
         .test_delay(&base, &name, timeout_ms.unwrap_or(3000))
-        .await
+        .await?;
+    ensure_clash_run(&pm, run_id).await?;
+    Ok(result)
 }
 
 /// Direct TCP-connect ping, independent of sing-box.
