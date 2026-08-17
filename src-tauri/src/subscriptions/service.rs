@@ -71,6 +71,33 @@ impl SubscriptionService {
         Ok(snapshot(records))
     }
 
+    pub async fn resolve_link_refs(
+        &self,
+        refs: &[super::SubscriptionLinkRef],
+    ) -> AppResult<Vec<crate::parser::Outbound>> {
+        let _guard = self.lock.lock().await;
+        let records = self.store.load_all()?;
+        resolve_link_refs_from_records(&records, refs)
+    }
+
+    pub async fn resolve_all_links(&self) -> AppResult<Vec<crate::parser::Outbound>> {
+        let _guard = self.lock.lock().await;
+        let records = self.store.load_all()?;
+        let refs = records
+            .iter()
+            .filter(|record| record.kind == SubscriptionKind::LinkList)
+            .flat_map(|record| {
+                record.link_outbounds.iter().enumerate().map(move |(index, _)| {
+                    super::SubscriptionLinkRef {
+                        subscription_id: record.id.clone(),
+                        link_key: format!("index-{index}"),
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        resolve_link_refs_from_records(&records, &refs)
+    }
+
     pub async fn add(&self, input: AddSubscriptionInput) -> AppResult<RefreshSubscriptionResult> {
         let _guard = self.lock.lock().await;
         validate_input(&input.name, &input.url, input.interval_minutes)?;
@@ -356,6 +383,39 @@ fn snapshot(records: Vec<SubscriptionRecord>) -> SubscriptionSnapshot {
     }
 }
 
+fn resolve_link_refs_from_records(
+    records: &[SubscriptionRecord],
+    refs: &[super::SubscriptionLinkRef],
+) -> AppResult<Vec<crate::parser::Outbound>> {
+    use std::collections::HashSet;
+
+    let mut seen = HashSet::new();
+    let mut outbounds = Vec::with_capacity(refs.len());
+    for reference in refs {
+        if !seen.insert((reference.subscription_id.as_str(), reference.link_key.as_str())) {
+            return Err(AppError::Validation("duplicate subscription link selection".into()));
+        }
+        let record = records
+            .iter()
+            .find(|record| record.id == reference.subscription_id)
+            .ok_or_else(|| AppError::Subscription("subscription was not found".into()))?;
+        if record.kind != SubscriptionKind::LinkList {
+            return Err(AppError::Validation("subscription does not contain links".into()));
+        }
+        let index = reference
+            .link_key
+            .strip_prefix("index-")
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|_| reference.link_key.chars().all(|value| value.is_ascii_digit() || value == '-'))
+            .ok_or_else(|| AppError::Validation("subscription link selection is invalid".into()))?;
+        let outbound = record
+            .link_outbounds
+            .get(index)
+            .ok_or_else(|| AppError::Validation("subscription link selection is stale".into()))?;
+        outbounds.push(outbound.clone());
+    }
+    Ok(outbounds)
+}
 fn validate_input(name: &str, url: &str, interval_minutes: u32) -> AppResult<()> {
     if name.trim().is_empty() {
         return Err(AppError::Validation("subscription name is required".into()));

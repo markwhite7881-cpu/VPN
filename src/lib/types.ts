@@ -3,6 +3,24 @@
 
 export type AppError = { kind: string; message: string };
 
+export type EngineKind = "singbox" | "xray";
+export type SubscriptionKind = "auto" | "link_list" | "singbox_bundle" | "xray_bundle";
+export interface SubscriptionLinkSummary { key: string; label: string; protocol: string; }
+export interface SubscriptionOutbounds { subscription_id: string; links: SubscriptionLinkSummary[]; }
+export interface SubscriptionChildProfile { key: string; name: string; engine: EngineKind; }
+export interface SubscriptionSummary {
+  id: string; name: string; kind: SubscriptionKind; engine: EngineKind | null;
+  interval_minutes: number; active_child_key: string | null; children: SubscriptionChildProfile[];
+  metadata: { profile_title?: string | null; profile_web_page_url?: string | null; support_url?: string | null; expires_at?: string | null };
+  last_success_at: string | null; last_http_status: number | null; last_error: AppError | null;
+}
+export interface SubscriptionSnapshot { subscriptions: SubscriptionSummary[]; link_outbounds: SubscriptionOutbounds[]; }
+export interface RefreshSubscriptionResult { subscription: SubscriptionSummary; selection_changed: boolean; }
+export interface AddSubscriptionInput { name: string; url: string; intervalMinutes: number; }
+export interface SubscriptionLinkRef { subscription_id: string; link_key: string; }
+export interface ManagedLaunchResult { status: StatusReport; config_path: string; profile_count: number; }
+
+
 export type Status =
   | "stopped"
   | "starting"

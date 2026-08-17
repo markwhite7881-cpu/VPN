@@ -121,8 +121,57 @@ pub async fn check_config(app: AppHandle, config_path: String) -> AppResult<Stri
     Ok(format!("{}{}", stdout, stderr))
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ManagedLaunchInput {
+    pub manual_outbounds: Vec<Outbound>,
+    pub subscription_links: Option<Vec<crate::subscriptions::SubscriptionLinkRef>>,
+    pub select_all_subscription_links: bool,
+    pub settings: GeneratorSettings,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedLaunchResult {
+    pub status: StatusReport,
+    pub config_path: String,
+    pub profile_count: usize,
+}
+
+/// Resolve opaque subscription references, merge them with manual profiles,
+/// and start through the existing sing-box lifecycle.
 #[tauri::command]
-pub async fn start_singbox(
+pub async fn start_managed_singbox(
+    app: AppHandle,
+    pm: State<'_, Arc<ProcessManager>>,
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    input: ManagedLaunchInput,
+) -> AppResult<ManagedLaunchResult> {
+    let mut outbounds = input.manual_outbounds;
+    let subscription_outbounds = if input.select_all_subscription_links {
+        subscriptions.resolve_all_links().await?
+    } else {
+        subscriptions
+            .resolve_link_refs(input.subscription_links.as_deref().unwrap_or_default())
+            .await?
+    };
+    outbounds.extend(subscription_outbounds);
+    let value = config::Config::build(&outbounds, &input.settings);
+    let body = serde_json::to_vec_pretty(&value).map_err(AppError::Serde)?;
+    let dir = app.path().temp_dir().unwrap_or_else(|_| std::env::temp_dir());
+    std::fs::create_dir_all(&dir).map_err(AppError::Io)?;
+    let path = dir.join("config.managed.json");
+    std::fs::write(&path, body).map_err(AppError::Io)?;
+    let controller_url = format!("http://{}", input.settings.clash_api.external_controller);
+    let binary = ProcessManager::locate_binary(&app)?;
+    let status = pm
+        .start(&app, &binary, &path, Some(controller_url))
+        .await?;
+    Ok(ManagedLaunchResult {
+        status,
+        config_path: path.display().to_string(),
+        profile_count: outbounds.len(),
+    })
+}
+
     app: AppHandle,
     pm: State<'_, Arc<ProcessManager>>,
     config_path: String,

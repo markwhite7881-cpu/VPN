@@ -188,6 +188,12 @@ pub struct SubscriptionSummary {
     pub last_error: Option<SubscriptionFailure>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubscriptionLinkRef {
+    pub subscription_id: String,
+    pub link_key: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubscriptionSnapshot {
     pub subscriptions: Vec<SubscriptionSummary>,

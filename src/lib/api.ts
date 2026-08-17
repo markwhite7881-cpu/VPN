@@ -6,7 +6,13 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AddSubscriptionInput,
   BinaryInfo,
+  ManagedLaunchResult,
+  SubscriptionLinkRef,
+  SubscriptionSnapshot,
+  RefreshSubscriptionResult,
+  SubscriptionSummary,
   GeneratorSettings,
   LogLine,
   Outbound,
@@ -53,6 +59,8 @@ export const api = {
 
   start: (configPath: string) =>
     call<StatusReport>("start_singbox", { configPath }),
+  startManaged: (input: { manualOutbounds: Outbound[]; subscriptionLinks?: SubscriptionLinkRef[]; selectAllSubscriptionLinks: boolean; settings: GeneratorSettings }) =>
+    call<ManagedLaunchResult>("start_managed_singbox", { input }),
   stop: () => call<StatusReport>("stop_singbox"),
   getStatus: () => call<StatusReport>("get_status"),
   getLogs: (limit = 500) => call<LogLine[]>("get_logs", { limit }),
@@ -99,8 +107,16 @@ export const api = {
   lookupGeoip: (ips: string[]) =>
     call<[string, string][]>("lookup_geoip", { ips }),
 
-  fetchSubscription: (url: string) =>
-    call<ParseLinksResult>("fetch_subscription", { url }),
+  listSubscriptions: () => call<SubscriptionSnapshot>("list_subscriptions"),
+  addSubscription: (input: AddSubscriptionInput) => call<RefreshSubscriptionResult>("add_subscription", { input }),
+  removeSubscription: (id: string) => call<void>("remove_subscription", { id }),
+  refreshSubscription: (id: string) => call<RefreshSubscriptionResult>("refresh_subscription", { id }),
+  setSubscriptionInterval: (id: string, intervalMinutes: number) => call<SubscriptionSummary>("set_subscription_interval", { id, intervalMinutes }),
+  selectSubscriptionChild: (id: string, childKey: string) => call<SubscriptionSummary>("select_subscription_child", { id, childKey }),
+  migrateLegacySubscriptions: (inputs: Array<{ id: string; name: string; url: string; intervalMinutes: number }>) => call<SubscriptionSnapshot>("migrate_legacy_subscriptions", { inputs }),
+  getSubscriptionHwid: () => call<boolean>("get_subscription_hwid"),
+  resetSubscriptionHwid: () => call<void>("reset_subscription_hwid"),
+
 
   getAutostart: () => call<boolean>("get_autostart"),
   setAutostart: (enabled: boolean) =>

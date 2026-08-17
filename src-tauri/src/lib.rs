@@ -107,6 +107,7 @@ pub fn run() {
             commands::get_singbox_version,
             commands::check_config,
             commands::start_singbox,
+            commands::start_managed_singbox,
             commands::stop_singbox,
             commands::get_status,
             commands::get_logs,

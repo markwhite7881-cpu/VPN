@@ -351,48 +351,10 @@ export default function App() {
     }
   }, [activeTab]);
 
-  // Flattened profiles = manual + each subscription's last result.
-  //
-  // We de-duplicate by `server:port` (the *endpoint*, not the display
-  // tag) because some subscription providers echo every link twice
-  // and a few even ship two different servers with the same display
-  // name. Without dedup, sing-box refuses to start with
-  // `duplicate outbound/endpoint tag: …` and the whole app goes dark.
-  // We also de-duplicate by tag in case the same link is added
-  // manually AND imported via subscription.
-  const profiles = useMemo<Outbound[]>(() => {
-    const raw: Outbound[] = [...manualProfiles];
-    for (const s of subs.subs) {
-      const r = subs.lastResult[s.id];
-      if (r) raw.push(...r.outbounds);
-    }
-    const seenEndpoint = new Set<string>();
-    const seenTag = new Set<string>();
-    const out: Outbound[] = [];
-    for (const p of raw) {
-      if (p.protocol === "unsupported") {
-        out.push(p);
-        continue;
-      }
-      const endpoint = `${p.server}:${p.port}`;
-      if (seenEndpoint.has(endpoint)) continue;
-      // The "tag" comes from the share-link's URL fragment, which
-      // sing-box requires to be globally unique. The provider we
-      // work with reuses names ("🇩🇪 Германия" twice) and that
-      // breaks sing-box's `decode config` step. Disambiguate by
-      // appending " @host:port" to repeated tags so each outbound
-      // has a unique tag, while the original name is still visible
-      // in the UI (we never use the disambiguated tag for display).
-      if (seenTag.has(p.tag)) {
-        out.push({ ...p, tag: `${p.tag} @${endpoint}` });
-      } else {
-        out.push(p);
-        seenTag.add(p.tag);
-      }
-      seenEndpoint.add(endpoint);
-    }
-    return out;
-  }, [manualProfiles, subs.subs, subs.lastResult]);
+  // Backend-owned subscription profiles remain opaque to React. Manual
+  // profiles are still editable and continue to use the existing UI path.
+  const profiles = useMemo<Outbound[]>(() => manualProfiles, [manualProfiles]);
+
 
   // Online GeoIP fallback for servers the cheap heuristic in
   // `flagForProfile` couldn't resolve (no emoji, no Russian/English
@@ -565,17 +527,15 @@ export default function App() {
       //    selector's `default`, so the very first request after
       //    sing-box boots goes straight through the picked server.
       //    No more `auto` urltest flash for the first packet.
-      const value = await api.generateConfig(profiles, settings);
-      const path = await api.saveConfigToPath(value, undefined);
+      const managed = await api.startManaged({
+        manualOutbounds: manualProfiles,
+        subscriptionLinks: subs.snapshot.link_outbounds.flatMap((group) => group.links.map((link) => ({ subscription_id: group.subscription_id, link_key: link.key }))),
+        selectAllSubscriptionLinks: true,
+        settings,
+      });
+      const path = managed.config_path;
       setConfigPath(path);
-
-      // 2. Start sing-box FIRST. If it crashes, `finalize_exit` in
-      //    the ProcessManager clears the system proxy on our behalf
-      //    (otherwise Windows keeps sending traffic to a dead
-      //    listener and the user loses all internet until they
-      //    manually flip the proxy back off).
-      const controllerUrl = `http://${settings.clash_api.external_controller}`;
-      const next = await api.startSingboxWithConfig(path, controllerUrl);
+      const next = managed.status;
       setStatus(next);
 
       // 3. Only now that sing-box is alive do we tell Windows to

@@ -12,7 +12,7 @@ import {
 import { ProfileCard } from "@/components/ProfileCard";
 import { SubscriptionsCard } from "@/components/SubscriptionsCard";
 import { cn } from "@/lib/utils";
-import type { Outbound, ParseFailure, Subscription } from "@/lib/types";
+import type { Outbound, ParseFailure, SubscriptionSummary } from "@/lib/types";
 
 export interface ServersTabProps {
   profiles: Outbound[];
@@ -26,7 +26,7 @@ export interface ServersTabProps {
   onClearAll: () => void;
   parsing: boolean;
   // Subscriptions
-  subs: Subscription[];
+  subs: SubscriptionSummary[];
   subFetching: Record<string, boolean>;
   onAddSub: (sub: { url: string; name?: string; intervalMinutes?: number }) => void;
   onRemoveSub: (id: string) => void;
@@ -199,8 +199,6 @@ export function ServersTab({
               onRefresh={onRefreshSub}
               onRefreshAll={onRefreshAllSubs}
               onIntervalChange={onSetSubInterval}
-              onApply={() => {}}
-              available={profiles}
             />
           </CardContent>
         )}

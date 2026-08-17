@@ -3,20 +3,18 @@ import { Loader2, Plus, RefreshCw, Rss, Trash2 } from "lucide-react";
 import { Button } from "./Button";
 import { Badge } from "./Badge";
 import { cn } from "@/lib/utils";
-import type { Outbound, Subscription } from "@/lib/types";
+import type { SubscriptionSummary } from "@/lib/types";
 
 export interface SubscriptionsCardProps {
-  subs: Subscription[];
+  subs: SubscriptionSummary[];
   fetching: Record<string, boolean>;
   onAdd: (input: { name?: string; url: string; intervalMinutes?: number }) => void;
   onRemove: (id: string) => void;
   onRefresh: (id: string) => void;
   onRefreshAll: () => void;
   onIntervalChange: (id: string, minutes: number) => void;
-  onApply: (outbounds: Outbound[]) => void;
-  /** Pre-aggregated outbounds from `lastResult` — passed in so the
-   * parent can splice them into the main profiles list. */
-  available: Outbound[];
+  onApply?: () => void;
+  available?: never;
 }
 
 export function SubscriptionsCard({
@@ -27,7 +25,6 @@ export function SubscriptionsCard({
   onRefresh,
   onRefreshAll,
   onIntervalChange,
-  available,
 }: SubscriptionsCardProps) {
   const [adding, setAdding] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -165,14 +162,14 @@ function SubscriptionRow({
   onRemove,
   onIntervalChange,
 }: {
-  sub: Subscription;
+  sub: SubscriptionSummary;
   loading: boolean;
   onRefresh: () => void;
   onRemove: () => void;
   onIntervalChange: (m: number) => void;
 }) {
-  const fetched = sub.lastFetchedAt
-    ? new Date(sub.lastFetchedAt).toLocaleTimeString()
+  const fetched = sub.last_success_at
+    ? new Date(sub.last_success_at).toLocaleTimeString()
     : "—";
   return (
     <div className="rounded-md border border-border bg-card/40 p-2">
@@ -184,17 +181,17 @@ function SubscriptionRow({
         >
           {sub.name}
         </span>
-        {sub.lastCount > 0 && (
+        {sub.kind === "link_list" && (
           <span className="rounded bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground">
-            {sub.lastCount}
+            sing-box
           </span>
         )}
-        {sub.lastError && (
+        {sub.last_error && (
           <span
             className="rounded bg-destructive/10 px-1.5 py-0 text-[10px] text-destructive"
-            title={sub.lastError}
+            title={sub.last_error.message}
           >
-            {sub.lastErrorKind || "error"}
+            {sub.last_error.kind || "error"}
           </span>
         )}
         <div className="ml-auto flex items-center gap-1">
@@ -224,19 +221,14 @@ function SubscriptionRow({
         </div>
       </div>
       <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
-        <span className="truncate font-mono" title={sub.url}>
-          {sub.url}
-        </span>
-      </div>
-      <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
         <span>last: {fetched}</span>
         <span>·</span>
-        <span className={cn(sub.lastError ? "text-destructive" : "text-foreground/70")}>
-          {sub.lastError ?? `${sub.lastCount} profile${sub.lastCount === 1 ? "" : "s"}`}
+        <span className={cn(sub.last_error ? "text-destructive" : "text-foreground/70")}>
+          {sub.last_error?.message ?? `${sub.children.length || "link"} profile${sub.children.length === 1 ? "" : "s"}`}
         </span>
         <span>·</span>
         <select
-          value={sub.intervalMinutes}
+          value={sub.interval_minutes}
           onChange={(e) => onIntervalChange(parseInt(e.target.value, 10))}
           className="rounded border border-input bg-background px-1 py-0 font-mono text-[10px]"
         >

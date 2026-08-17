@@ -54,7 +54,35 @@ async fn spawn_server(
 }
 
 #[tokio::test]
-async fn sends_exact_headers_and_parses_metadata() {
+async fn opaque_link_refs_resolve_and_reject_invalid_selection() {
+    use crate::parser::Outbound;
+    use crate::subscriptions::{SubscriptionKind, SubscriptionLinkRef, SubscriptionRecord};
+
+    let directory = tempfile::tempdir().unwrap();
+    let link = crate::parser::parse_link(
+        "vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    )
+    .unwrap();
+    let record = SubscriptionRecord {
+        id: "sub-opaque".into(), name: "Provider".into(), url: "https://example.test".into(),
+        kind: SubscriptionKind::LinkList, engine: Some(super::EngineKind::Singbox), interval_minutes: 60,
+        active_child_key: None, children: Vec::new(), link_outbounds: vec![link], bundle_digest: None,
+        metadata: Default::default(), last_success_at: None, last_http_status: Some(200), last_error: None,
+    };
+    super::SubscriptionStore::new(directory.path().join("subscriptions.json"))
+        .replace_all(&[record]).unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")), SubscriptionHttpClient::new().unwrap(), "1.3.0".into(),
+    );
+    let resolved = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-0".into() }]).await.unwrap();
+    assert!(matches!(resolved.first(), Some(Outbound::Vless(_))));
+    let stale = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-9".into() }]).await;
+    assert!(matches!(stale, Err(AppError::Validation(_))));
+    let duplicate = service.resolve_link_refs(&[SubscriptionLinkRef { subscription_id: "sub-opaque".into(), link_key: "index-0".into() }; 2]).await;
+    assert!(matches!(duplicate, Err(AppError::Validation(_))));
+}
+
     let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nProfile-Title: Demo\r\nContent-Length: 33\r\nConnection: close\r\n\r\n{\"outbounds\":[{\"type\":\"direct\"}]}".to_vec();
     let (url, captured) = spawn_server(response, Duration::ZERO).await;
     let hwid = Uuid::new_v4();
