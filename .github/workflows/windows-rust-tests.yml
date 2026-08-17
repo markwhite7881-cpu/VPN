@@ -2,6 +2,9 @@ name: windows-rust-tests
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/hwid-xray-subscriptions
 
 permissions:
   contents: read
