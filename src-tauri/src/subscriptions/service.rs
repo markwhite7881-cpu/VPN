@@ -13,8 +13,8 @@ use crate::error::{AppError, AppResult};
 use super::model::ChildProfileRecord;
 use super::{
     classify_payload, ClassifiedChild, ClassifiedPayload, EngineKind, HwidStore, ProviderMetadata,
-    SubscriptionHttpClient, SubscriptionKind, SubscriptionOutbounds, SubscriptionRecord,
-    SubscriptionSnapshot, SubscriptionStore, SubscriptionSummary,
+    SubscriptionHttpClient, SubscriptionKind, SubscriptionLinkSummary, SubscriptionOutbounds,
+    SubscriptionRecord, SubscriptionSnapshot, SubscriptionStore, SubscriptionSummary,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -334,7 +334,19 @@ fn snapshot(records: Vec<SubscriptionRecord>) -> SubscriptionSnapshot {
         .filter(|record| record.kind == SubscriptionKind::LinkList)
         .map(|record| SubscriptionOutbounds {
             subscription_id: record.id.clone(),
-            outbounds: record.link_outbounds.clone(),
+            links: record
+                .link_outbounds
+                .iter()
+                .enumerate()
+                .map(|(index, outbound)| {
+                    let protocol = outbound.protocol().to_owned();
+                    SubscriptionLinkSummary {
+                        key: format!("index-{index}"),
+                        label: format!("{protocol} link {}", index + 1),
+                        protocol,
+                    }
+                })
+                .collect(),
         })
         .collect();
     let subscriptions = records.iter().map(SubscriptionRecord::to_summary).collect();

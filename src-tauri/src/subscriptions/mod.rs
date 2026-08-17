@@ -15,8 +15,8 @@ pub use hwid::HwidStore;
 pub use metadata::parse_metadata;
 pub use model::{
     ChildProfileSummary, EngineKind, ProviderMetadata, SubscriptionErrorKind, SubscriptionKind,
-    SubscriptionOutbounds, SubscriptionRecord, SubscriptionSnapshot, SubscriptionSummary,
-    SubscriptionUserinfo,
+    SubscriptionLinkSummary, SubscriptionOutbounds, SubscriptionRecord, SubscriptionSnapshot,
+    SubscriptionSummary, SubscriptionUserinfo,
 };
 pub use service::{
     AddSubscriptionInput, LegacySubscriptionInput, RefreshSubscriptionResult, SubscriptionService,

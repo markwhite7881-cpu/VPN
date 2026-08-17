@@ -133,6 +133,97 @@ async fn blocks_redirect_to_non_local_http() {
 }
 
 #[tokio::test]
+async fn snapshot_never_serializes_or_debug_formats_link_credentials() {
+    let response = http_response(
+        "text/plain",
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel\ntrojan://supersecret-password@credential-server.example.test:443?sni=credential-server.example.test#AnotherLabel",
+    );
+    let (url, server) = spawn_sequence_server(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    service
+        .add(AddSubscriptionInput {
+            name: "Provider".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .unwrap();
+    let snapshot = service.list().await.unwrap();
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    let debug = format!("{snapshot:?}");
+
+    for secret in [
+        "server-address.example.test",
+        "credential-server.example.test",
+        "11111111-1111-4111-8111-111111111111",
+        "supersecret-password",
+        "vless://",
+        "trojan://",
+    ] {
+        assert!(
+            !serialized.contains(secret),
+            "serialized snapshot leaked {secret}"
+        );
+        assert!(!debug.contains(secret), "debug snapshot leaked {secret}");
+    }
+    assert_eq!(snapshot.link_outbounds.len(), 1);
+    assert_eq!(snapshot.link_outbounds[0].links.len(), 2);
+    assert_eq!(snapshot.link_outbounds[0].links[0].key, "index-0");
+    assert_eq!(snapshot.link_outbounds[0].links[0].label, "vless link 1");
+    assert_eq!(snapshot.link_outbounds[0].links[0].protocol, "vless");
+    assert_eq!(snapshot.link_outbounds[0].links[1].key, "index-1");
+    assert_eq!(snapshot.link_outbounds[0].links[1].label, "trojan link 2");
+    assert_eq!(snapshot.link_outbounds[0].links[1].protocol, "trojan");
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn legacy_fetch_returns_link_list_compatibility_result() {
+    let response = http_response(
+        "text/plain",
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    );
+    let (url, server) = spawn_sequence_server(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let result = service.fetch_legacy_links(url.as_str()).await.unwrap();
+
+    assert_eq!(result.outbounds.len(), 1);
+    assert_eq!(result.outbounds[0].protocol(), "vless");
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn legacy_fetch_rejects_full_configuration_bundle() {
+    let (url, server) = spawn_sequence_server(vec![xray_bundle(&["Private child"])]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let result = service.fetch_legacy_links(url.as_str()).await;
+
+    assert!(matches!(result, Err(AppError::Unsupported(_))));
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn failed_first_refresh_does_not_store_subscription() {
     let (url, server) = spawn_sequence_server(vec![http_response(
         "application/json",

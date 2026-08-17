@@ -194,10 +194,17 @@ pub struct SubscriptionSnapshot {
     pub link_outbounds: Vec<SubscriptionOutbounds>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SubscriptionOutbounds {
     pub subscription_id: String,
-    pub outbounds: Vec<crate::parser::Outbound>,
+    pub links: Vec<SubscriptionLinkSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubscriptionLinkSummary {
+    pub key: String,
+    pub label: String,
+    pub protocol: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
