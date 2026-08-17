@@ -452,6 +452,9 @@ impl ProcessManager {
             (None, _) => format!("{engine_label} stopped"),
         };
         drop(status);
+        // Unexpected exits bypass `stop`, so cancel any sing-box-owned traffic
+        // task before another engine can occupy the sole process slot.
+        self.traffic.stop().await;
         self.push_log(LogStream::System, line).await;
         // Best-effort: roll back the system proxy so Windows doesn't
         // keep trying to talk to a listener that no longer exists.
