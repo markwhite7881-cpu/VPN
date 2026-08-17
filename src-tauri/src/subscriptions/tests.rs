@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-use super::http::SubscriptionHttpClient;
+use super::{
+    AddSubscriptionInput, HwidStore, SubscriptionHttpClient, SubscriptionService, SubscriptionStore,
+};
 
 #[derive(Debug)]
 struct CapturedRequest {
@@ -128,4 +130,190 @@ async fn blocks_redirect_to_non_local_http() {
         .await;
     assert!(matches!(result, Err(AppError::UnsafeRedirect(_))));
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn failed_first_refresh_does_not_store_subscription() {
+    let (url, server) = spawn_sequence_server(vec![http_response(
+        "application/json",
+        br#"[{"not":"classifiable"}]"#,
+    )])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    assert!(service
+        .add(AddSubscriptionInput {
+            name: "Provider".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .is_err());
+    assert!(service.list().await.unwrap().subscriptions.is_empty());
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn failed_refresh_keeps_last_valid_bundle_and_selection() {
+    let (service, id, server) = service_with_responses(vec![
+        xray_bundle(&["First", "Second"]),
+        http_response("application/json", br#"[{"not":"classifiable"}]"#),
+    ])
+    .await;
+
+    service.select_child(&id, "index-1").await.unwrap();
+    assert!(service.refresh(&id).await.is_err());
+    let after = service.list().await.unwrap().subscriptions.remove(0);
+
+    assert_eq!(after.active_child_key.as_deref(), Some("index-1"));
+    assert_eq!(after.children.len(), 2);
+    assert_eq!(
+        after.kind,
+        crate::subscriptions::SubscriptionKind::XrayBundle
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn refresh_keeps_positional_selection_when_credentials_change() {
+    let (service, id, server) = service_with_responses(vec![
+        xray_bundle(&["First", "Second"]),
+        xray_bundle(&["First updated", "Second updated"]),
+    ])
+    .await;
+
+    service.select_child(&id, "index-1").await.unwrap();
+    let refresh = service.refresh(&id).await.unwrap();
+
+    assert!(!refresh.selection_changed);
+    assert_eq!(
+        refresh.subscription.active_child_key.as_deref(),
+        Some("index-1")
+    );
+    assert_eq!(refresh.subscription.children[1].key, "index-1");
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn refresh_keeps_selection_at_the_same_position_when_children_reorder() {
+    let (service, id, server) = service_with_responses(vec![
+        xray_bundle(&["First", "Second"]),
+        xray_bundle(&["Second", "First"]),
+    ])
+    .await;
+
+    service.select_child(&id, "index-1").await.unwrap();
+    let refresh = service.refresh(&id).await.unwrap();
+
+    assert!(!refresh.selection_changed);
+    assert_eq!(
+        refresh.subscription.active_child_key.as_deref(),
+        Some("index-1")
+    );
+    assert_eq!(refresh.subscription.children[1].name, "First");
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn refresh_falls_back_to_first_child_when_selected_position_is_removed() {
+    let (service, id, server) = service_with_responses(vec![
+        xray_bundle(&["First", "Second"]),
+        xray_bundle(&["First"]),
+    ])
+    .await;
+
+    service.select_child(&id, "index-1").await.unwrap();
+    let refresh = service.refresh(&id).await.unwrap();
+
+    assert!(refresh.selection_changed);
+    assert_eq!(
+        refresh.subscription.active_child_key.as_deref(),
+        Some("index-0")
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn mixed_bundle_refresh_rejects_the_entire_candidate() {
+    let (service, id, server) = service_with_responses(vec![
+        xray_bundle(&["First", "Second"]),
+        http_response(
+            "application/json",
+            br#"[{"outbounds":[{"protocol":"freedom"}]},{"outbounds":[{"type":"direct"}]}]"#,
+        ),
+    ])
+    .await;
+
+    service.select_child(&id, "index-1").await.unwrap();
+    assert!(service.refresh(&id).await.is_err());
+    let after = service.list().await.unwrap().subscriptions.remove(0);
+
+    assert_eq!(after.active_child_key.as_deref(), Some("index-1"));
+    assert_eq!(after.children.len(), 2);
+    let _ = server.await;
+}
+
+async fn service_with_responses(
+    responses: Vec<Vec<u8>>,
+) -> (SubscriptionService, String, tokio::task::JoinHandle<()>) {
+    let (url, server) = spawn_sequence_server(responses).await;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.keep();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(path.join("subscriptions.json")),
+        HwidStore::new(path.join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+    let added = service
+        .add(AddSubscriptionInput {
+            name: "Provider".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .unwrap();
+    (service, added.subscription.id, server)
+}
+
+async fn spawn_sequence_server(responses: Vec<Vec<u8>>) -> (Url, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        for response in responses {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = vec![0_u8; 16 * 1024];
+            let _ = socket.read(&mut buffer).await.unwrap();
+            socket.write_all(&response).await.unwrap();
+        }
+    });
+    (
+        Url::parse(&format!("http://{address}/subscription")).unwrap(),
+        task,
+    )
+}
+
+fn xray_bundle(names: &[&str]) -> Vec<u8> {
+    let children = names
+        .iter()
+        .map(|name| format!(r#"{{"remarks":"{name}","outbounds":[{{"protocol":"freedom"}}]}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    http_response("application/json", format!("[{children}]").as_bytes())
+}
+
+fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    response
 }

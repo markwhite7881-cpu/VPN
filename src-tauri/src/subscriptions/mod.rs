@@ -3,6 +3,7 @@ pub mod http;
 pub mod hwid;
 pub mod metadata;
 pub mod model;
+pub mod service;
 pub mod store;
 
 #[cfg(test)]
@@ -14,6 +15,10 @@ pub use hwid::HwidStore;
 pub use metadata::parse_metadata;
 pub use model::{
     ChildProfileSummary, EngineKind, ProviderMetadata, SubscriptionErrorKind, SubscriptionKind,
-    SubscriptionRecord, SubscriptionSummary, SubscriptionUserinfo,
+    SubscriptionOutbounds, SubscriptionRecord, SubscriptionSnapshot, SubscriptionSummary,
+    SubscriptionUserinfo,
+};
+pub use service::{
+    AddSubscriptionInput, LegacySubscriptionInput, RefreshSubscriptionResult, SubscriptionService,
 };
 pub use store::SubscriptionStore;

@@ -13,6 +13,10 @@ use crate::config::{self, GeneratorSettings};
 use crate::error::{AppError, AppResult};
 use crate::parser::{self, Outbound};
 use crate::process::{LogLine, ProcessManager, StatusReport};
+use crate::subscriptions::{
+    AddSubscriptionInput, LegacySubscriptionInput, RefreshSubscriptionResult, SubscriptionService,
+    SubscriptionSnapshot, SubscriptionSummary,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SingboxVersion {
@@ -584,87 +588,90 @@ pub async fn set_autostart(_app: AppHandle, _enabled: bool) -> AppResult<bool> {
 
 // --- Subscriptions -----------------------------------------------------
 
-/// Fetch a subscription URL and return the parsed outbounds + failures.
-/// Accepts both raw newline-separated links and base64-encoded blobs
-/// (the two common formats used by v2ray/sing-box subscription
-/// providers).
 #[tauri::command]
-pub async fn fetch_subscription(url: String) -> AppResult<ParseLinksResult> {
-    let body = reqwest::Client::new()
-        .get(&url)
-        .header("User-Agent", "cloakwire/0.1")
-        .send()
-        .await
-        .map_err(|e| AppError::Clash(format!("subscription fetch failed: {e}")))?
-        .error_for_status()
-        .map_err(|e| AppError::Clash(format!("subscription HTTP error: {e}")))?
-        .text()
-        .await
-        .map_err(|e| AppError::Clash(format!("subscription read failed: {e}")))?;
-
-    // We re-implement the per-line reporting here so the UI can
-    // surface failures. `parse_links` swallows them and returns a
-    // flat Vec.
-    let (lines, _was_b64) = split_subscription_text(&body);
-    let mut outbounds = Vec::new();
-    let mut failures = Vec::new();
-    for line in lines {
-        match parser::parse_link(&line) {
-            Ok(o) => outbounds.push(o),
-            Err(e) => failures.push(ParseFailure { line, error: e }),
-        }
-    }
-    Ok(ParseLinksResult {
-        outbounds,
-        failures,
-    })
+pub async fn list_subscriptions(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+) -> AppResult<SubscriptionSnapshot> {
+    subscriptions.list().await
 }
 
-/// Decode a subscription blob: per-line links OR a base64-encoded
-/// newline-separated blob. Mirrors the helper in `parser::mod` but
-/// works on the post-fetch text.
-fn split_subscription_text(text: &str) -> (Vec<String>, bool) {
-    let text = text.trim();
-    if text.is_empty() {
-        return (Vec::new(), false);
-    }
-    let lines: Vec<String> = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(String::from)
-        .collect();
-    if lines.iter().any(|l| l.contains("://")) {
-        return (lines, false);
-    }
-    let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    let try_decode = |input: &str| {
-        use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-        use base64::Engine as _;
-        let pad = |mut t: String| {
-            while t.len() % 4 != 0 {
-                t.push('=');
-            }
-            t
-        };
-        URL_SAFE_NO_PAD
-            .decode(input)
-            .or_else(|_| URL_SAFE_NO_PAD.decode(pad(input.to_string())))
-            .or_else(|_| STANDARD.decode(input))
-            .or_else(|_| STANDARD.decode(pad(input.to_string())))
-            .ok()
-    };
-    if let Some(bytes) = try_decode(&cleaned) {
-        let decoded = String::from_utf8_lossy(&bytes).into_owned();
-        let lines: Vec<String> = decoded
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(String::from)
-            .collect();
-        return (lines, true);
-    }
-    (lines, false)
+#[tauri::command]
+pub async fn add_subscription(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    input: AddSubscriptionInput,
+) -> AppResult<RefreshSubscriptionResult> {
+    subscriptions.add(input).await
+}
+
+#[tauri::command]
+pub async fn remove_subscription(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    id: String,
+) -> AppResult<()> {
+    subscriptions.remove(&id).await
+}
+
+#[tauri::command]
+pub async fn set_subscription_interval(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    id: String,
+    interval_minutes: u32,
+) -> AppResult<SubscriptionSummary> {
+    subscriptions.set_interval(&id, interval_minutes).await
+}
+
+#[tauri::command]
+pub async fn select_subscription_child(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    id: String,
+    child_key: String,
+) -> AppResult<SubscriptionSummary> {
+    subscriptions.select_child(&id, &child_key).await
+}
+
+#[tauri::command]
+pub async fn refresh_subscription(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    id: String,
+) -> AppResult<RefreshSubscriptionResult> {
+    subscriptions.refresh(&id).await
+}
+
+#[tauri::command]
+pub async fn migrate_legacy_subscriptions(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    inputs: Vec<LegacySubscriptionInput>,
+) -> AppResult<SubscriptionSnapshot> {
+    subscriptions.migrate_legacy(inputs).await
+}
+
+// The persisted HWID intentionally never crosses the command boundary. These
+// commands preserve the frontend control surface without serializing its value.
+#[tauri::command]
+pub async fn get_subscription_hwid(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+) -> AppResult<bool> {
+    subscriptions.get_hwid().await?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn reset_subscription_hwid(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+) -> AppResult<()> {
+    subscriptions.reset_hwid().await?;
+    Ok(())
+}
+
+/// Compatibility endpoint for old frontend builds. It uses the secure HTTP
+/// client and deliberately refuses full-config bundles rather than flattening
+/// their contents into legacy share-link DTOs.
+#[tauri::command]
+pub async fn fetch_subscription(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    url: String,
+) -> AppResult<ParseLinksResult> {
+    subscriptions.fetch_legacy_links(&url).await
 }
 
 /// Detect whether the subscription is plain multiline or base64-encoded

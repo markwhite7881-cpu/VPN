@@ -66,6 +66,16 @@ pub fn run() {
     builder
         .manage(manager)
         .setup(|app| {
+            let subscription_data = app.path().app_data_dir()?.join("subscriptions");
+            std::fs::create_dir_all(&subscription_data)?;
+            let subscriptions = subscriptions::SubscriptionService::new(
+                subscriptions::SubscriptionStore::new(subscription_data.join("subscriptions.json")),
+                subscriptions::HwidStore::new(subscription_data.join("device-id")),
+                subscriptions::SubscriptionHttpClient::new()?,
+                env!("CARGO_PKG_VERSION").into(),
+            );
+            app.manage(Arc::new(subscriptions));
+
             // We're now inside Tauri's tokio runtime, safe to spawn.
             let mgr = app.state::<Arc<ProcessManager>>();
             let mgr = Arc::clone(mgr.inner());
@@ -120,6 +130,15 @@ pub fn run() {
             commands::start_traffic,
             commands::stop_traffic,
             commands::fetch_subscription,
+            commands::list_subscriptions,
+            commands::add_subscription,
+            commands::remove_subscription,
+            commands::set_subscription_interval,
+            commands::select_subscription_child,
+            commands::refresh_subscription,
+            commands::migrate_legacy_subscriptions,
+            commands::get_subscription_hwid,
+            commands::reset_subscription_hwid,
             commands::get_autostart,
             commands::set_autostart,
             commands::apply_system_proxy,

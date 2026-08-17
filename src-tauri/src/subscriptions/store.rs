@@ -102,6 +102,8 @@ mod tests {
             interval_minutes: 60,
             active_child_key: None,
             children: Vec::new(),
+            link_outbounds: Vec::new(),
+            bundle_digest: None,
             metadata: ProviderMetadata::default(),
             last_success_at: None,
             last_http_status: None,

@@ -67,6 +67,10 @@ pub struct SubscriptionRecord {
     #[serde(default)]
     pub children: Vec<ChildProfileRecord>,
     #[serde(default)]
+    pub link_outbounds: Vec<crate::parser::Outbound>,
+    #[serde(default)]
+    pub bundle_digest: Option<String>,
+    #[serde(default)]
     pub metadata: ProviderMetadata,
     #[serde(default)]
     pub last_success_at: Option<DateTime<Utc>>,
@@ -104,6 +108,8 @@ pub struct ChildProfileRecord {
     pub name: String,
     pub engine: EngineKind,
     pub config: Value,
+    #[serde(default)]
+    pub digest: String,
 }
 
 impl ChildProfileRecord {
@@ -182,6 +188,18 @@ pub struct SubscriptionSummary {
     pub last_error: Option<SubscriptionFailure>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubscriptionSnapshot {
+    pub subscriptions: Vec<SubscriptionSummary>,
+    pub link_outbounds: Vec<SubscriptionOutbounds>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SubscriptionOutbounds {
+    pub subscription_id: String,
+    pub outbounds: Vec<crate::parser::Outbound>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChildProfileSummary {
     pub key: String,
@@ -211,7 +229,10 @@ mod tests {
                 name: "Primary".into(),
                 engine: EngineKind::Singbox,
                 config: json!({"outbounds": [{"server": "secret.example.test"}]}),
+                digest: "digest".into(),
             }],
+            link_outbounds: Vec::new(),
+            bundle_digest: Some("bundle-digest".into()),
             metadata: ProviderMetadata::default(),
             last_success_at: None,
             last_http_status: Some(200),
