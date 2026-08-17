@@ -85,10 +85,16 @@ impl Default for StatusReport {
     }
 }
 
+/// A child handle paired with the launch generation that owns it.
+struct ChildSlot {
+    run_id: u64,
+    child: Child,
+}
+
 /// Centralised state shared across Tauri commands.
 pub struct ProcessManager {
     /// Currently running child process, if any.
-    child: Mutex<Option<Child>>,
+    child: Mutex<Option<ChildSlot>>,
     /// Ring buffer of recent log lines.
     logs: Mutex<VecDeque<LogLine>>,
     /// Current snapshot used by the frontend.
@@ -106,8 +112,8 @@ pub struct ProcessManager {
     /// Live traffic WebSocket reader. Started automatically when
     /// `controller_url` is set, stopped when the process exits.
     traffic: Arc<TrafficStream>,
-    /// Serializes traffic start/stop transitions across launch generations.
-    traffic_lifecycle: Mutex<()>,
+    /// Serializes traffic transitions without holding a mutex guard over I/O.
+    traffic_transition: std::sync::atomic::AtomicBool,
 }
 
 impl Default for ProcessManager {
@@ -122,7 +128,7 @@ impl Default for ProcessManager {
             next_run_id: AtomicU64::new(0),
             active_run_id: AtomicU64::new(0),
             traffic: Arc::new(TrafficStream::new()),
-            traffic_lifecycle: Mutex::new(()),
+            traffic_transition: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -160,7 +166,9 @@ impl ProcessManager {
         ]);
         let child = cmd.spawn().expect("test child starts");
         let pid = child.id();
-        *self.child.lock().await = Some(child);
+        let run_id = self.next_run_id.fetch_add(1, Ordering::AcqRel) + 1;
+        self.active_run_id.store(run_id, Ordering::Release);
+        *self.child.lock().await = Some(ChildSlot { run_id, child });
         let mut status = self.status.lock().await;
         status.status = Status::Running;
         status.pid = pid;
@@ -247,7 +255,10 @@ impl ProcessManager {
                 if !manager.is_active_singbox_run(run_id).await {
                     return;
                 }
-                if set_tun_dns_from_config(&manager, run_id, &config_path).await.is_err() {
+                if set_tun_dns_from_config(&manager, run_id, &config_path)
+                    .await
+                    .is_err()
+                {
                     log::warn!("could not read runtime configuration for TUN DNS setup");
                 }
             });
@@ -270,7 +281,7 @@ impl ProcessManager {
                 }
             });
         }
-        *self.child.lock().await = Some(child);
+        *self.child.lock().await = Some(ChildSlot { run_id, child });
         *self.started_at.lock().await = Some(std::time::Instant::now());
         *self.current_config.lock().await = Some(spec.config_path);
         if spec.engine == EngineKind::Singbox {
@@ -288,7 +299,7 @@ impl ProcessManager {
         if spec.engine == EngineKind::Singbox {
             if let (Some(controller_url), Some(app)) = (spec.controller_url, app.cloned()) {
                 if self.is_active_singbox_run(run_id).await {
-                    let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+                    self.acquire_traffic_transition().await;
                     if let Err(error) = self.traffic.start(app, &controller_url).await {
                         log::warn!("traffic stream start failed: {error}");
                     } else if !self.is_active_singbox_run(run_id).await {
@@ -297,6 +308,7 @@ impl ProcessManager {
                         // an old sing-box controller stream alive for Xray.
                         self.traffic.stop().await;
                     }
+                    self.release_traffic_transition();
                 }
             }
         }
@@ -333,11 +345,14 @@ impl ProcessManager {
     /// Stop the running sing-box. Graceful: send SIGTERM/taskkill, then
     /// escalate to SIGKILL after `DEFAULT_TERMINATE_TIMEOUT`.
     pub async fn stop(self: &Arc<Self>) -> AppResult<StatusReport> {
-        let mut child = self.child.lock().await.take().ok_or(AppError::NotRunning)?;
+        let ChildSlot { run_id, mut child } =
+            self.child.lock().await.take().ok_or(AppError::NotRunning)?;
 
         let engine = {
             let mut status = self.status.lock().await;
-            status.status = Status::Stopping;
+            if self.active_run_id.load(Ordering::Acquire) == run_id {
+                status.status = Status::Stopping;
+            }
             status.engine
         };
         let label = match engine {
@@ -347,9 +362,12 @@ impl ProcessManager {
         self.push_log(LogStream::System, label).await;
 
         // The traffic stream belongs exclusively to sing-box's Clash controller.
-        if engine == Some(EngineKind::Singbox) {
-            let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
-            self.traffic.stop().await;
+        if engine == Some(EngineKind::Singbox) && self.is_active_run(run_id).await {
+            self.acquire_traffic_transition().await;
+            if self.is_active_run(run_id).await {
+                self.traffic.stop().await;
+            }
+            self.release_traffic_transition();
         }
 
         // Try graceful first. The child is owned locally for the rest of this
@@ -359,7 +377,6 @@ impl ProcessManager {
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let run_id = self.active_run_id.load(Ordering::Acquire);
                     self.finalize_exit(run_id, Some(status.code().unwrap_or(-1)), None)
                         .await;
                     return Ok(self.status.lock().await.clone());
@@ -367,7 +384,6 @@ impl ProcessManager {
                 Ok(None) if std::time::Instant::now() >= deadline => {
                     let _ = child.start_kill();
                     let _ = child.wait().await;
-                    let run_id = self.active_run_id.load(Ordering::Acquire);
                     self.finalize_exit(
                         run_id,
                         Some(-1),
@@ -378,7 +394,6 @@ impl ProcessManager {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    let run_id = self.active_run_id.load(Ordering::Acquire);
                     self.finalize_exit(run_id, None, Some(format!("try_wait failed: {e}")))
                         .await;
                     return Ok(self.status.lock().await.clone());
@@ -408,31 +423,44 @@ impl ProcessManager {
     /// Tauri commands).
     /// Start manual traffic streaming only for the active sing-box run.
     pub async fn start_traffic(self: &Arc<Self>, app: AppHandle) -> AppResult<()> {
-        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
         let run_id = self.active_run_id.load(Ordering::Acquire);
-        let controller_url = {
-            let status = self.status.lock().await;
-            if status.status != Status::Running || status.engine != Some(EngineKind::Singbox) {
-                return Err(AppError::Clash("sing-box is not running".to_string()));
-            }
-            drop(status);
-            self.controller_url.lock().await.clone().ok_or_else(|| {
-                AppError::Clash("sing-box controller is unavailable".to_string())
-            })?
-        };
-        self.traffic.start(app, &controller_url).await?;
+        let controller_url =
+            {
+                let status = self.status.lock().await;
+                if status.status != Status::Running || status.engine != Some(EngineKind::Singbox) {
+                    return Err(AppError::Clash("sing-box is not running".to_string()));
+                }
+                drop(status);
+                self.controller_url.lock().await.clone().ok_or_else(|| {
+                    AppError::Clash("sing-box controller is unavailable".to_string())
+                })?
+            };
+        self.acquire_traffic_transition().await;
+        let result = self.traffic.start(app, &controller_url).await;
+        if let Err(error) = result {
+            self.release_traffic_transition();
+            return Err(error);
+        }
         if !self.is_active_singbox_run(run_id).await {
             self.traffic.stop().await;
+            self.release_traffic_transition();
             return Err(AppError::Clash("sing-box is no longer running".to_string()));
         }
+        self.release_traffic_transition();
         Ok(())
     }
 
-    /// Stop manual traffic streaming through the same lifecycle gate used by
-    /// automatic launch and cleanup.
+    /// Stop manual traffic streaming, without allowing a stale command to
+    /// stop a stream belonging to a newer launch generation.
     pub async fn stop_traffic(&self) {
-        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
-        self.traffic.stop().await;
+        let run_id = self.active_run_id.load(Ordering::Acquire);
+        if self.is_active_run(run_id).await {
+            self.acquire_traffic_transition().await;
+            if self.is_active_run(run_id).await {
+                self.traffic.stop().await;
+            }
+            self.release_traffic_transition();
+        }
     }
 
     async fn reset_with_proxy_cleanup<F>(&self, clear_proxy: F)
@@ -451,9 +479,10 @@ impl ProcessManager {
         *self.status.lock().await = StatusReport::default();
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
-        *self.controller_url.lock().await = None;
-        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+        self.controller_url.lock().await.take();
+        self.acquire_traffic_transition().await;
         self.traffic.stop().await;
+        self.release_traffic_transition();
         self.push_log(LogStream::System, "process manager state reset")
             .await;
     }
@@ -481,8 +510,12 @@ impl ProcessManager {
 
         // Unexpected exits bypass `stop`; cancel the old run before another
         // launch can start a sing-box traffic task.
-        let _traffic_lifecycle = self.traffic_lifecycle.lock().await;
+        self.acquire_traffic_transition().await;
         self.traffic.stop().await;
+        self.release_traffic_transition();
+        if self.active_run_id.load(Ordering::Acquire) != run_id {
+            return;
+        }
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
         *self.controller_url.lock().await = None;
@@ -525,6 +558,34 @@ impl ProcessManager {
         }
     }
 
+    async fn acquire_traffic_transition(&self) {
+        while self
+            .traffic_transition
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+
+    fn release_traffic_transition(&self) {
+        self.traffic_transition.store(false, Ordering::Release);
+    }
+
+    async fn take_child_if_run(&self, run_id: u64) -> bool {
+        let mut child = self.child.lock().await;
+        if child.as_ref().is_some_and(|slot| slot.run_id == run_id) {
+            child.take();
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn is_active_run(&self, run_id: u64) -> bool {
+        run_id != 0 && self.active_run_id.load(Ordering::Acquire) == run_id
+    }
+
     async fn is_active_singbox_run(&self, run_id: u64) -> bool {
         if self.active_run_id.load(Ordering::Acquire) != run_id {
             return false;
@@ -554,26 +615,39 @@ impl ProcessManager {
                 tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
                 let exited = {
                     let mut guard = self.child.lock().await;
-                    guard.as_mut().and_then(|child| match child.try_wait() {
-                        Ok(Some(status)) => Some(Ok(status)),
-                        Ok(None) => None,
-                        Err(error) => Some(Err(error)),
+                    guard.as_mut().map(|slot| {
+                        let run_id = slot.run_id;
+                        let result = match slot.child.try_wait() {
+                            Ok(Some(status)) => Some(Ok(status)),
+                            Ok(None) => None,
+                            Err(error) => Some(Err(error)),
+                        };
+                        (run_id, result)
                     })
                 };
                 match exited {
-                    Some(Ok(status)) => {
+                    Some((run_id, Some(Ok(status)))) => {
                         let code = status.code();
-                        let run_id = self.active_run_id.load(Ordering::Acquire);
-                        self.child.lock().await.take();
-                        self.finalize_exit(run_id, code, None).await;
+                        // A reset/relaunch may have replaced the slot while we
+                        // were outside the child mutex. Never take its newer
+                        // handle for an older watcher observation.
+                        let owns_slot = self.take_child_if_run(run_id).await;
+                        if owns_slot {
+                            self.finalize_exit(run_id, code, None).await;
+                        }
                     }
-                    Some(Err(error)) => {
-                        let run_id = self.active_run_id.load(Ordering::Acquire);
-                        self.child.lock().await.take();
-                        self.finalize_exit(run_id, None, Some(format!("try_wait failed: {error}")))
+                    Some((run_id, Some(Err(error)))) => {
+                        let owns_slot = self.take_child_if_run(run_id).await;
+                        if owns_slot {
+                            self.finalize_exit(
+                                run_id,
+                                None,
+                                Some(format!("try_wait failed: {error}")),
+                            )
                             .await;
+                        }
                     }
-                    None => {
+                    Some((_run_id, None)) => {
                         // Update uptime without retaining the child guard.
                         if self.child.lock().await.is_some() {
                             if let Some(start) = *self.started_at.lock().await {
@@ -582,6 +656,7 @@ impl ProcessManager {
                             }
                         }
                     }
+                    None => {}
                 }
             }
         });
@@ -1246,6 +1321,41 @@ mod engine_runtime_tests {
         assert_eq!(pm.controller_url().await, None);
         pm.stop().await.unwrap();
         assert_eq!(pm.controller_url().await, None);
+    }
+
+    #[tokio::test]
+    async fn stale_stop_finalizer_does_not_stop_newer_run() {
+        let pm = ProcessManager::new();
+        pm.active_run_id.store(2, Ordering::Release);
+        {
+            let mut status = pm.status.lock().await;
+            status.status = Status::Running;
+            status.engine = Some(EngineKind::Xray);
+            status.profile_key = Some("newer".into());
+        }
+
+        pm.finalize_exit(1, Some(-1), Some("old stop".into())).await;
+
+        let status = pm.snapshot_status().await;
+        assert_eq!(status.status, Status::Running);
+        assert_eq!(status.profile_key.as_deref(), Some("newer"));
+        assert_eq!(pm.active_run_id.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test]
+    async fn stale_watcher_cannot_take_newer_child_slot() {
+        let pm = ProcessManager::new();
+        pm.install_test_child(EngineKind::Xray).await;
+        let old_run_id = pm.active_run_id.load(Ordering::Acquire);
+        pm.reset_with_proxy_cleanup(|| Ok(())).await;
+        pm.install_test_child(EngineKind::Xray).await;
+        let new_run_id = pm.active_run_id.load(Ordering::Acquire);
+
+        assert_ne!(old_run_id, new_run_id);
+        assert!(!pm.take_child_if_run(old_run_id).await);
+        assert!(pm.is_running().await);
+        assert!(pm.take_child_if_run(new_run_id).await);
+        assert!(!pm.is_running().await);
     }
 
     #[tokio::test]
