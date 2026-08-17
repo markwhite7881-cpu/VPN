@@ -26,6 +26,7 @@ pub mod process;
 pub mod subscriptions;
 pub mod traffic;
 pub mod updates;
+pub mod xray;
 
 use process::ProcessManager;
 
