@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::engine::{EngineKind, LaunchSpec};
 use crate::error::{AppError, AppResult};
@@ -109,6 +109,9 @@ pub struct ProcessManager {
     next_run_id: AtomicU64,
     /// ID currently allowed to mutate runtime state; zero means no active run.
     active_run_id: AtomicU64,
+    /// Serializes Clash API requests with lifecycle transitions. Owned
+    /// semaphore permits may cross I/O awaits without holding a mutex guard.
+    clash_transition: Arc<Semaphore>,
     /// Live traffic WebSocket reader. Started automatically when
     /// `controller_url` is set, stopped when the process exits.
     traffic: Arc<TrafficStream>,
@@ -127,6 +130,7 @@ impl Default for ProcessManager {
             controller_url: Mutex::new(None),
             next_run_id: AtomicU64::new(0),
             active_run_id: AtomicU64::new(0),
+            clash_transition: Arc::new(Semaphore::new(1)),
             traffic: Arc::new(TrafficStream::new()),
             traffic_transition: std::sync::atomic::AtomicBool::new(false),
         }
@@ -196,6 +200,7 @@ impl ProcessManager {
         app: Option<&AppHandle>,
         spec: LaunchSpec,
     ) -> AppResult<StatusReport> {
+        let _clash_transition = self.acquire_clash_transition().await;
         {
             let mut status = self.status.lock().await;
             if matches!(
@@ -344,6 +349,7 @@ impl ProcessManager {
     /// Stop the running sing-box. Graceful: send SIGTERM/taskkill, then
     /// escalate to SIGKILL after `DEFAULT_TERMINATE_TIMEOUT`.
     pub async fn stop(self: &Arc<Self>) -> AppResult<StatusReport> {
+        let _clash_transition = self.acquire_clash_transition().await;
         let ChildSlot { run_id, mut child } =
             self.child.lock().await.take().ok_or(AppError::NotRunning)?;
 
@@ -415,6 +421,13 @@ impl ProcessManager {
         self.clash_controller().await.ok().map(|(_, url)| url)
     }
 
+    /// Acquire the manager-owned gate for a Clash API request. The owned
+    /// permit intentionally remains held across the request await, while
+    /// avoiding a mutex guard across await.
+    pub async fn acquire_clash_api(&self) -> OwnedSemaphorePermit {
+        self.acquire_clash_transition().await
+    }
+
     /// Capture the controller URL together with the sing-box launch generation
     /// that owns it. Callers must validate the generation again after I/O.
     pub async fn clash_controller(&self) -> AppResult<(u64, String)> {
@@ -427,9 +440,12 @@ impl ProcessManager {
             return Err(AppError::Clash("sing-box is not running".to_string()));
         }
         drop(status);
-        let url = self.controller_url.lock().await.clone().ok_or_else(|| {
-            AppError::Clash("sing-box controller is unavailable".to_string())
-        })?;
+        let url = self
+            .controller_url
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| AppError::Clash("sing-box controller is unavailable".to_string()))?;
         Ok((run_id, url))
     }
 
@@ -505,6 +521,7 @@ impl ProcessManager {
     /// for manual recovery; the spawned child (if any) is dropped, which
     /// triggers `kill_on_drop` on the underlying Command.
     pub async fn reset(&self) {
+        let _clash_transition = self.acquire_clash_transition().await;
         self.reset_with_proxy_cleanup(clear_system_proxy).await;
     }
 
@@ -570,6 +587,14 @@ impl ProcessManager {
             )
             .await;
         }
+    }
+
+    async fn acquire_clash_transition(&self) -> OwnedSemaphorePermit {
+        self.clash_transition
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("clash transition semaphore is never closed")
     }
 
     async fn acquire_traffic_transition(&self) {
@@ -647,12 +672,14 @@ impl ProcessManager {
                         // handle for an older watcher observation.
                         let owns_slot = self.take_child_if_run(run_id).await;
                         if owns_slot {
+                            let _clash_transition = self.acquire_clash_transition().await;
                             self.finalize_exit(run_id, code, None).await;
                         }
                     }
                     Some((run_id, Some(Err(error)))) => {
                         let owns_slot = self.take_child_if_run(run_id).await;
                         if owns_slot {
+                            let _clash_transition = self.acquire_clash_transition().await;
                             self.finalize_exit(
                                 run_id,
                                 None,
@@ -1272,6 +1299,21 @@ mod clash_controller_tests {
     use super::*;
 
     #[tokio::test]
+    async fn clash_transition_serializes_api_requests() {
+        let manager = ProcessManager::new();
+        let permit = manager.acquire_clash_api().await;
+
+        let blocked =
+            tokio::time::timeout(Duration::from_millis(10), manager.acquire_clash_api()).await;
+        assert!(blocked.is_err());
+        drop(permit);
+
+        let _permit = tokio::time::timeout(Duration::from_millis(100), manager.acquire_clash_api())
+            .await
+            .expect("gate opens after the request permit is released");
+    }
+
+    #[tokio::test]
     async fn clash_controller_rejects_xray_runs() {
         let manager = ProcessManager::new();
         manager.active_run_id.store(1, Ordering::Release);
@@ -1295,7 +1337,10 @@ mod clash_controller_tests {
         drop(status);
         *manager.controller_url.lock().await = Some("http://127.0.0.1:9090".to_string());
 
-        let (run_id, url) = manager.clash_controller().await.expect("controller available");
+        let (run_id, url) = manager
+            .clash_controller()
+            .await
+            .expect("controller available");
         assert_eq!(run_id, 7);
         assert_eq!(url, "http://127.0.0.1:9090");
         assert!(manager.is_active_singbox_run(run_id).await);

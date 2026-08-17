@@ -481,6 +481,7 @@ async fn ensure_clash_run(pm: &ProcessManager, run_id: u64) -> AppResult<()> {
 pub async fn list_proxies(
     pm: State<'_, Arc<ProcessManager>>,
 ) -> AppResult<crate::clash_api::ProxiesResponse> {
+    let _clash_transition = pm.acquire_clash_api().await;
     let (run_id, base) = api_url(&pm).await?;
     let client = crate::clash_api::Client::new();
     let response = client.list_proxies(&base).await?;
@@ -494,6 +495,7 @@ pub async fn select_proxy(
     group: String,
     member: String,
 ) -> AppResult<()> {
+    let _clash_transition = pm.acquire_clash_api().await;
     let (run_id, base) = api_url(&pm).await?;
     ensure_clash_run(&pm, run_id).await?;
     let client = crate::clash_api::Client::new();
@@ -507,6 +509,7 @@ pub async fn test_delay(
     name: String,
     timeout_ms: Option<u32>,
 ) -> AppResult<Option<u32>> {
+    let _clash_transition = pm.acquire_clash_api().await;
     let (run_id, base) = api_url(&pm).await?;
     let client = crate::clash_api::Client::new();
     let result = client
