@@ -266,19 +266,25 @@ impl ProcessManager {
         }
         if let Some(stdout) = child.stdout.take() {
             let manager = Arc::clone(self);
+            let engine = spec.engine;
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    manager.push_log(LogStream::Stdout, line).await;
+                    if let Some(line) = frontend_log_line(engine, &line) {
+                        manager.push_log(LogStream::Stdout, line).await;
+                    }
                 }
             });
         }
         if let Some(stderr) = child.stderr.take() {
             let manager = Arc::clone(self);
+            let engine = spec.engine;
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    manager.push_log(LogStream::Stderr, line).await;
+                    if let Some(line) = frontend_log_line(engine, &line) {
+                        manager.push_log(LogStream::Stderr, line).await;
+                    }
                 }
             });
         }
@@ -407,7 +413,9 @@ impl ProcessManager {
     }
 
     pub async fn current_config(&self) -> Option<PathBuf> {
-        self.current_config.lock().await.clone()
+        let engine = self.status.lock().await.engine;
+        let path = self.current_config.lock().await.clone();
+        path.and_then(|path| public_config_path(engine.unwrap_or(EngineKind::Singbox), path))
     }
 
     pub async fn controller_url(&self) -> Option<String> {
@@ -541,27 +549,33 @@ impl ProcessManager {
             if self.active_run_id.load(Ordering::Acquire) != run_id {
                 return;
             }
-            let engine_label = match status.engine {
-                Some(EngineKind::Xray) => "Xray",
-                _ => "sing-box",
-            };
+            let is_xray = status.engine == Some(EngineKind::Xray);
+            let engine_label = if is_xray { "Xray" } else { "sing-box" };
             status.status = Status::Stopped;
             status.pid = None;
             status.uptime_secs = None;
             status.last_exit_code = code;
-            status.last_error = err.clone();
+            status.last_error = (!is_xray).then(|| err.clone()).flatten();
             status.engine = None;
             status.profile_key = None;
             status.profile_name = None;
             // Status is the launch gate. Invalidate this ID before dropping it
             // so older async tasks cannot touch a later run.
             self.active_run_id.store(0, Ordering::Release);
-            match (&err, code) {
-                (Some(error), _) => format!("{engine_label} exited unexpectedly: {error}"),
-                (None, Some(exit_code)) if exit_code != 0 => {
-                    format!("{engine_label} exited with code {exit_code}")
+            if is_xray {
+                if code == Some(0) {
+                    "Xray stopped".to_string()
+                } else {
+                    "Xray stopped unexpectedly".to_string()
                 }
-                (None, _) => format!("{engine_label} stopped"),
+            } else {
+                match (&err, code) {
+                    (Some(error), _) => format!("{engine_label} exited unexpectedly: {error}"),
+                    (None, Some(exit_code)) if exit_code != 0 => {
+                        format!("{engine_label} exited with code {exit_code}")
+                    }
+                    (None, _) => format!("{engine_label} stopped"),
+                }
             }
         };
         self.push_log(LogStream::System, line).await;
@@ -673,6 +687,14 @@ impl ProcessManager {
             }
         });
     }
+}
+
+fn frontend_log_line(engine: EngineKind, line: &str) -> Option<String> {
+    (engine == EngineKind::Singbox).then(|| line.to_owned())
+}
+
+fn public_config_path(engine: EngineKind, path: PathBuf) -> Option<PathBuf> {
+    (engine == EngineKind::Singbox).then_some(path)
 }
 
 // --- System proxy management ---------------------------------------
@@ -1384,6 +1406,44 @@ mod engine_runtime_tests {
             profile_key: Some("test-xray".into()),
             profile_name: Some("Test Xray".into()),
         }
+    }
+
+    #[tokio::test]
+    async fn xray_output_is_not_exposed_to_frontend_logs() {
+        let manager = ProcessManager::new();
+        let secret_output =
+            "uuid=secret-uuid https://provider.example/sub C:\\runtime\\config.json";
+
+        if let Some(line) = frontend_log_line(EngineKind::Xray, secret_output) {
+            manager.push_log(LogStream::Stdout, line).await;
+        }
+
+        assert!(manager.snapshot_logs(10).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn xray_runtime_config_path_is_not_public() {
+        let manager = ProcessManager::new();
+        let secret_path = PathBuf::from("C:\\runtime\\secret-xray-config.json");
+        manager.status.lock().await.engine = Some(EngineKind::Xray);
+        *manager.current_config.lock().await = Some(secret_path);
+
+        assert_eq!(manager.current_config().await, None);
+    }
+
+    #[test]
+    fn singbox_output_and_config_path_remain_public() {
+        let line = "sing-box safe output";
+        let path = PathBuf::from("C:\\runtime\\singbox-config.json");
+
+        assert_eq!(
+            frontend_log_line(EngineKind::Singbox, line),
+            Some(line.to_owned())
+        );
+        assert_eq!(
+            public_config_path(EngineKind::Singbox, path.clone()),
+            Some(path)
+        );
     }
 
     #[tokio::test]
