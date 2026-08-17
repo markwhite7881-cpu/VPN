@@ -121,6 +121,8 @@ pub struct ProviderMetadata {
     #[serde(default)]
     pub profile_title: Option<String>,
     #[serde(default)]
+    pub update_interval_minutes: Option<u32>,
+    #[serde(default)]
     pub update_interval_hours: Option<u32>,
     #[serde(default)]
     pub profile_web_page_url: Option<String>,
@@ -227,11 +229,14 @@ mod tests {
             "id": "legacy-1",
             "name": "Legacy",
             "url": "https://example.test/sub",
-            "interval_minutes": 60
+            "interval_minutes": 60,
+            "metadata": {"update_interval_hours": 6}
         }))
         .unwrap();
         assert_eq!(record.kind, SubscriptionKind::Auto);
         assert_eq!(record.engine, None);
+        assert_eq!(record.metadata.update_interval_hours, Some(6));
+        assert_eq!(record.metadata.update_interval_minutes, None);
     }
 
     #[test]

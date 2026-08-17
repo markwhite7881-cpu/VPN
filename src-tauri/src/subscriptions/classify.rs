@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::Engine as _;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::commands::ParseLinksResult;
+use crate::commands::{ParseFailure, ParseLinksResult};
 use crate::error::{AppError, AppResult};
 use crate::parser;
 
@@ -91,17 +93,65 @@ fn classify_json(bytes: &[u8]) -> AppResult<ClassifiedPayload> {
 fn classify_links(bytes: &[u8]) -> AppResult<ClassifiedPayload> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| AppError::Subscription("subscription link payload is not UTF-8".into()))?;
-    let outbounds = parser::parse_links(text)
-        .map_err(|_| AppError::Subscription("subscription link payload is invalid".into()))?;
+    let lines = split_link_lines(text)?;
+    let mut outbounds = Vec::new();
+    let mut failures = Vec::new();
+    for line in lines {
+        match parser::parse_link(&line) {
+            Ok(outbound) => outbounds.push(outbound),
+            Err(error) => failures.push(ParseFailure { line, error }),
+        }
+    }
     if outbounds.is_empty() {
         return Err(AppError::Subscription(
-            "subscription link payload is empty".into(),
+            "subscription link payload has no usable links".into(),
         ));
     }
     Ok(ClassifiedPayload::LinkList(ParseLinksResult {
         outbounds,
-        failures: Vec::new(),
+        failures,
     }))
+}
+
+fn split_link_lines(text: &str) -> AppResult<Vec<String>> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let direct = nonempty_link_lines(text);
+    if direct.iter().any(|line| line.contains("://")) {
+        return Ok(direct);
+    }
+
+    let cleaned: String = text
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    let padded = || {
+        let mut value = cleaned.clone();
+        while value.len() % 4 != 0 {
+            value.push('=');
+        }
+        value
+    };
+    let decoded = URL_SAFE_NO_PAD
+        .decode(&cleaned)
+        .or_else(|_| URL_SAFE_NO_PAD.decode(padded()))
+        .or_else(|_| STANDARD.decode(&cleaned))
+        .or_else(|_| STANDARD.decode(padded()))
+        .map_err(|_| AppError::Subscription("subscription link payload is invalid".into()))?;
+    let decoded = std::str::from_utf8(&decoded).map_err(|_| {
+        AppError::Subscription("decoded subscription link payload is not UTF-8".into())
+    })?;
+    Ok(nonempty_link_lines(decoded))
+}
+
+fn nonempty_link_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn detect_engine(value: &Value) -> AppResult<DetectedEngine> {
@@ -168,17 +218,9 @@ pub fn stable_child_key(value: &Value, index: usize, duplicate_ordinal: usize) -
 }
 
 fn child_identity(value: &Value) -> Option<String> {
-    for key in ["profile_id", "profileId", "id"] {
-        if let Some(id) = value
-            .get(key)
-            .and_then(Value::as_str)
-            .and_then(normalize_provider_id)
-        {
-            return Some(format!("id-{id}"));
-        }
-    }
     child_name(value)
         .as_deref()
+        .and_then(safe_public_label)
         .and_then(normalize_key)
         .map(|name| format!("name-{name}"))
 }
@@ -195,11 +237,38 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn normalize_provider_id(value: &str) -> Option<String> {
-    if Uuid::parse_str(value.trim()).is_ok() {
+fn safe_public_label(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    let sensitive_word = [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "credential",
+        "bearer",
+        "api-key",
+        "apikey",
+        "access-key",
+        "access_key",
+    ]
+    .iter()
+    .any(|word| lower.contains(word));
+    let sensitive_delimiter = value
+        .chars()
+        .any(|character| matches!(character, '/' | '\\' | ':' | '@' | '=' | '?' | '#' | '&'));
+    let suspicious_compact_length = !value.chars().any(char::is_whitespace) && value.len() > 32;
+
+    if value.is_empty()
+        || value.len() > 64
+        || Uuid::parse_str(value).is_ok()
+        || sensitive_word
+        || sensitive_delimiter
+        || suspicious_compact_length
+    {
         return None;
     }
-    normalize_key(value)
+    Some(value)
 }
 
 fn normalize_key(value: &str) -> Option<String> {
@@ -322,17 +391,20 @@ mod tests {
     }
 
     #[test]
-    fn stable_key_prefers_non_secret_provider_id() {
+    fn stable_key_ignores_generic_provider_ids_and_keeps_safe_public_label() {
         let first = json!({
-            "id": "profile-7",
-            "remarks": "Primary",
+            "id": "subscription-token-abc123",
+            "profile_id": "credential-secret-one",
+            "remarks": "Primary Node",
             "outbounds": [{"type": "vless", "uuid": "secret-one"}]
         });
         let rotated = json!({
-            "id": "profile-7",
-            "remarks": "Primary",
+            "id": "subscription-token-def456",
+            "profile_id": "credential-secret-two",
+            "remarks": "Primary Node",
             "outbounds": [{"type": "vless", "uuid": "secret-two"}]
         });
+        assert_eq!(stable_child_key(&first, 0, 0), "name-primary-node");
         assert_eq!(
             stable_child_key(&first, 0, 0),
             stable_child_key(&rotated, 0, 0)
@@ -340,20 +412,44 @@ mod tests {
     }
 
     #[test]
-    fn stable_key_excludes_uuid_shaped_credentials() {
-        let first = json!({
-            "id": "11111111-1111-4111-8111-111111111111",
-            "remarks": "Primary"
-        });
-        let rotated = json!({
-            "id": "22222222-2222-4222-8222-222222222222",
-            "remarks": "Primary"
-        });
-        assert_eq!(
-            stable_child_key(&first, 0, 0),
-            stable_child_key(&rotated, 0, 0)
-        );
-        assert_eq!(stable_child_key(&first, 0, 0), "name-primary");
+    fn stable_key_rejects_secret_like_public_labels() {
+        let cases = [
+            "11111111-1111-4111-8111-111111111111",
+            "https://user:password@example.test/sub",
+            "access-token-abc123",
+            "user@example.test",
+            "name=value",
+        ];
+        for label in cases {
+            let value = json!({"remarks": label});
+            assert_eq!(stable_child_key(&value, 3, 0), "index-3");
+        }
+    }
+
+    #[test]
+    fn classifies_plain_links_with_partial_failures() {
+        let payload = format!("{LINK}\nnot-a-supported-link");
+        let ClassifiedPayload::LinkList(result) =
+            classify_payload(payload.as_bytes(), Some("text/plain")).unwrap()
+        else {
+            panic!("expected link list");
+        };
+        assert_eq!(result.outbounds.len(), 1);
+        assert_eq!(result.failures.len(), 1);
+    }
+
+    #[test]
+    fn classifies_base64_links_with_partial_failures() {
+        use base64::Engine;
+        let decoded = format!("{LINK}\nnot-a-supported-link");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(decoded);
+        let ClassifiedPayload::LinkList(result) =
+            classify_payload(encoded.as_bytes(), Some("text/plain")).unwrap()
+        else {
+            panic!("expected link list");
+        };
+        assert_eq!(result.outbounds.len(), 1);
+        assert_eq!(result.failures.len(), 1);
     }
 
     #[test]

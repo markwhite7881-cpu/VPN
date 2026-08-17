@@ -6,23 +6,27 @@ use crate::error::AppResult;
 
 use super::model::{ProviderMetadata, SubscriptionUserinfo};
 
-const MIN_UPDATE_HOURS: u32 = 1;
-const MAX_UPDATE_HOURS: u32 = 30 * 24;
+const MIN_UPDATE_MINUTES: u32 = 15;
+const MAX_UPDATE_MINUTES: u32 = 30 * 24 * 60;
 
 pub fn parse_metadata(headers: &HeaderMap) -> AppResult<ProviderMetadata> {
     let profile_title = header_text(headers, "profile-title")
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let update_interval_hours = header_text(headers, "profile-update-interval")
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .map(|hours| hours.clamp(MIN_UPDATE_HOURS, MAX_UPDATE_HOURS));
+    // Provider convention: Profile-Update-Interval is expressed in hours and may be decimal.
+    let update_interval_minutes =
+        header_text(headers, "profile-update-interval").and_then(parse_update_interval_minutes);
+    let update_interval_hours = update_interval_minutes
+        .filter(|minutes| minutes % 60 == 0)
+        .map(|minutes| minutes / 60);
     let profile_web_page_url = header_text(headers, "profile-web-page-url").and_then(parse_web_url);
     let support_url = header_text(headers, "support-url").and_then(parse_web_url);
     let userinfo = header_text(headers, "subscription-userinfo").and_then(parse_userinfo);
 
     Ok(ProviderMetadata {
         profile_title,
+        update_interval_minutes,
         update_interval_hours,
         profile_web_page_url,
         support_url,
@@ -36,6 +40,21 @@ pub fn parse_metadata(headers: &HeaderMap) -> AppResult<ProviderMetadata> {
 
 fn header_text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
+}
+
+fn parse_update_interval_minutes(value: &str) -> Option<u32> {
+    let hours = value.trim().parse::<f64>().ok()?;
+    if !hours.is_finite() {
+        return None;
+    }
+    let minutes = (hours * 60.0).round();
+    if minutes <= f64::from(MIN_UPDATE_MINUTES) {
+        Some(MIN_UPDATE_MINUTES)
+    } else if minutes >= f64::from(MAX_UPDATE_MINUTES) {
+        Some(MAX_UPDATE_MINUTES)
+    } else {
+        Some(minutes as u32)
+    }
 }
 
 fn parse_web_url(value: &str) -> Option<String> {
@@ -105,6 +124,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(metadata.profile_title.as_deref(), Some("Cloakwire Demo"));
+        assert_eq!(metadata.update_interval_minutes, Some(360));
         assert_eq!(metadata.update_interval_hours, Some(6));
         assert_eq!(
             metadata.profile_web_page_url.as_deref(),
@@ -122,11 +142,26 @@ mod tests {
     }
 
     #[test]
-    fn clamps_update_interval_to_supported_range() {
-        let too_short = parse_metadata(&headers(&[("Profile-Update-Interval", "0")])).unwrap();
-        let too_long = parse_metadata(&headers(&[("Profile-Update-Interval", "10000")])).unwrap();
-        assert_eq!(too_short.update_interval_hours, Some(1));
-        assert_eq!(too_long.update_interval_hours, Some(720));
+    fn normalizes_decimal_hour_update_intervals_to_minutes() {
+        let below_minimum =
+            parse_metadata(&headers(&[("Profile-Update-Interval", "0.1")])).unwrap();
+        let fifteen_minutes =
+            parse_metadata(&headers(&[("Profile-Update-Interval", "0.25")])).unwrap();
+        let thirty_minutes =
+            parse_metadata(&headers(&[("Profile-Update-Interval", "0.5")])).unwrap();
+        let whole_hours = parse_metadata(&headers(&[("Profile-Update-Interval", "6")])).unwrap();
+        let above_maximum =
+            parse_metadata(&headers(&[("Profile-Update-Interval", "10000")])).unwrap();
+
+        assert_eq!(below_minimum.update_interval_minutes, Some(15));
+        assert_eq!(fifteen_minutes.update_interval_minutes, Some(15));
+        assert_eq!(thirty_minutes.update_interval_minutes, Some(30));
+        assert_eq!(whole_hours.update_interval_minutes, Some(360));
+        assert_eq!(above_maximum.update_interval_minutes, Some(43_200));
+        assert_eq!(fifteen_minutes.update_interval_hours, None);
+        assert_eq!(thirty_minutes.update_interval_hours, None);
+        assert_eq!(whole_hours.update_interval_hours, Some(6));
+        assert_eq!(above_maximum.update_interval_hours, Some(720));
     }
 
     #[test]
