@@ -19,7 +19,8 @@ import { cn } from "@/lib/utils";
 import { flagForProfile } from "@/lib/flags";
 import { profileLabel, profileEndpoint, isSupported } from "@/lib/outbound";
 import { isValidProfileSelection } from "@/lib/profileSelection";
-import type { Outbound, Status, StatusReport } from "@/lib/types";
+import type { Status, StatusReport } from "@/lib/types";
+import type { ConnectionProfile } from "@/lib/connectionProfiles";
 
 const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -31,7 +32,7 @@ export interface HomeTabProps {
   error: string | null;
   canStart: boolean;
   configName: string | null;
-  profiles: Outbound[];
+  profiles: ConnectionProfile[];
   selectedIndex: number;
   /**
    * Tag of the outbound the running `proxy` selector is currently
@@ -73,10 +74,14 @@ export function HomeTab({
   const isTransition = statusLabel === "starting" || statusLabel === "stopping";
   const trafficLive = useTrafficStream(isRunning || !inTauri, profiles.length);
   const current = trafficLive.current;
-  // Per-server latency probe (clash API `/proxies/{tag}/delay`,
-  // refreshed every 10 s while the tunnel is up). Shown next to
-  // each server in the picker and the all-servers grid.
-  const latency = useServerLatency(profiles, isRunning);
+  // Subscription summaries do not disclose endpoints, so only manual
+  // profiles participate in endpoint latency probing.
+  const latency = useServerLatency(
+    profiles
+      .filter((profile): profile is Extract<ConnectionProfile, { kind: "manual" }> => profile.kind === "manual")
+      .map((profile) => profile.outbound),
+    isRunning,
+  );
 
   const headline = (() => {
     if (statusLabel === "running") return "Connected";
@@ -101,13 +106,17 @@ export function HomeTab({
   // special — the urltest group is in charge, not a single server.
   const activeIsAuto = activeOutbound === "auto";
   const activeProfile = activeOutbound
-    ? profiles.find((p) => isSupported(p) && p.tag === activeOutbound)
+    ? profiles.find(
+        (profile) =>
+          profile.kind === "manual" &&
+          isSupported(profile.outbound) &&
+          profile.outbound.tag === activeOutbound,
+      )
     : undefined;
-  // `find` doesn't narrow the type, so we apply `isSupported`
-  // again before reading `tag` / `server` — both fields are
-  // missing on the `Outbound.Unsupported` variant.
   const activeSupported =
-    activeProfile && isSupported(activeProfile) ? activeProfile : null;
+    activeProfile?.kind === "manual" && isSupported(activeProfile.outbound)
+      ? activeProfile.outbound
+      : null;
   const activeFlag = activeIsAuto
     ? { flag: "🌐", code: "??" }
     : activeSupported
@@ -126,14 +135,15 @@ export function HomeTab({
   // on a different one. Happens with "Auto" once urltest migrates.
   // We surface this so the user can see at a glance why a request
   // that picked "Казахстан" went through "Нидерланды" instead.
+  const selectedManual = selected?.kind === "manual" ? selected.outbound : null;
   const activeMatchesPicked =
     activeOutbound == null ||
-    (selectedIndex >= 0 && selected && isSupported(selected) && selected.tag === activeOutbound);
+    (selectedIndex >= 0 && selectedManual && isSupported(selectedManual) && selectedManual.tag === activeOutbound);
   const userPicked = !activeMatchesPicked
     ? selectedIndex === -1
       ? "Auto"
-      : selected && isSupported(selected)
-        ? profileLabel(selected)
+      : selected
+        ? connectionProfileLabel(selected)
         : null
     : null;
 
@@ -302,31 +312,24 @@ export function HomeTab({
               Servers ({profiles.length})
             </div>
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-              {profiles.map((o, i) => {
-                const isSel = i === selectedIndex;
-                const supported = isSupported(o);
-                const { code } = flagForProfile({
-                  tag: supported ? o.tag : undefined,
-                  server: supported ? o.server : undefined,
-                  geoipByIp,
-                });
-                const ms = supported ? latency.byTag.get(o.tag) : undefined;
+              {profiles.map((profile, i) => {
+                const display = connectionProfileDisplay(profile, geoipByIp, latency.byTag);
                 return (
                   <button
-                    key={`picker-${i}-${profileEndpoint(o) || "x"}`}
+                    key={`picker-${i}-${display.key}`}
                     onClick={() => onSelect(i)}
                     className={cn(
                       "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors",
-                      isSel
+                      i === selectedIndex
                         ? "border-foreground/30 bg-foreground/5"
                         : "border-border bg-card/30 hover:bg-accent",
                     )}
                   >
-                    <FlagIcon code={code} size={14} className="shrink-0 self-center" />
+                    <FlagIcon code={display.code} size={14} className="shrink-0 self-center" />
                     <span className="min-w-0 flex-1 truncate font-medium">
-                      {profileLabel(o)}
+                      {display.label}
                     </span>
-                    <LatencyBadge ms={ms} />
+                    <LatencyBadge ms={display.ms} />
                   </button>
                 );
               })}
@@ -345,6 +348,41 @@ export function HomeTab({
   );
 }
 
+function connectionProfileLabel(profile: ConnectionProfile): string {
+  return profile.kind === "manual" ? profileLabel(profile.outbound) : profile.label;
+}
+
+function connectionProfileDisplay(
+  profile: ConnectionProfile,
+  geoipByIp: Record<string, string>,
+  latencyByTag: Map<string, number>,
+): { flag: string; code: string; label: string; protocol: string; ms: number | undefined; key: string } {
+  if (profile.kind === "subscription") {
+    return {
+      flag: "🌐",
+      code: "??",
+      label: profile.label,
+      protocol: profile.protocol,
+      ms: undefined,
+      key: `${profile.reference.subscription_id}-${profile.reference.link_key}`,
+    };
+  }
+  const outbound = profile.outbound;
+  const supported = isSupported(outbound);
+  const flag = flagForProfile({
+    tag: supported ? outbound.tag : undefined,
+    server: supported ? outbound.server : undefined,
+    geoipByIp,
+  });
+  return {
+    ...flag,
+    label: profileLabel(outbound),
+    protocol: outbound.protocol,
+    ms: supported ? latencyByTag.get(outbound.tag) : undefined,
+    key: profileEndpoint(outbound) || outbound.protocol,
+  };
+}
+
 /**
  * Compact dropdown-style server picker rendered above the hero icon.
  * Click → menu with the full list; click outside → closes.
@@ -356,7 +394,7 @@ function ServerPicker({
   geoipByIp,
   onSelect,
 }: {
-  profiles: Outbound[];
+  profiles: ConnectionProfile[];
   selectedIndex: number;
   latencyByTag: Map<string, number>;
   geoipByIp: Record<string, string>;
@@ -384,15 +422,12 @@ function ServerPicker({
   }, [open]);
 
   const selected = profiles[selectedIndex];
-  const selectedFlag = selected
-    ? flagForProfile({
-        tag: isSupported(selected) ? selected.tag : undefined,
-        server: isSupported(selected) ? selected.server : undefined,
-        geoipByIp,
-      })
-    : { flag: "🌐", code: "??" };
-  const selectedName = selected ? profileLabel(selected) : "No servers";
-  const selectedMs = selected && isSupported(selected) ? latencyByTag.get(selected.tag) : undefined;
+  const selectedDisplay = selected
+    ? connectionProfileDisplay(selected, geoipByIp, latencyByTag)
+    : null;
+  const selectedFlag = selectedDisplay ?? { flag: "🌐", code: "??", label: "No servers", ms: undefined, key: "none", protocol: "" };
+  const selectedName = selectedDisplay?.label ?? "No servers";
+  const selectedMs = selectedDisplay?.ms;
 
   return (
     <div ref={ref} className="relative">
@@ -454,16 +489,10 @@ function ServerPicker({
                 </span>
               </button>
             </li>
-            {profiles.map((o, i) => {
-              const isSel = i === selectedIndex;
-              const { code } = flagForProfile({
-                tag: isSupported(o) ? o.tag : undefined,
-                server: isSupported(o) ? o.server : undefined,
-                geoipByIp,
-              });
-              const ms = isSupported(o) ? latencyByTag.get(o.tag) : undefined;
+            {profiles.map((profile, i) => {
+              const display = connectionProfileDisplay(profile, geoipByIp, latencyByTag);
               return (
-                <li key={`pick-${i}-${profileEndpoint(o) || "x"}`}>
+                <li key={`pick-${i}-${display.key}`}>
                   <button
                     type="button"
                     onClick={() => {
@@ -472,17 +501,17 @@ function ServerPicker({
                     }}
                     className={cn(
                       "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
-                      isSel ? "bg-foreground/5" : "hover:bg-accent",
+                      i === selectedIndex ? "bg-foreground/5" : "hover:bg-accent",
                     )}
                   >
-                    <FlagIcon code={code} size={16} className="shrink-0" />
+                    <FlagIcon code={display.code} size={16} className="shrink-0" />
                     <span className="min-w-0 flex-1 truncate font-medium">
-                      {profileLabel(o)}
+                      {display.label}
                     </span>
                     <span className="font-mono text-[10px] text-muted-foreground">
-                      {o.protocol}
+                      {display.protocol}
                     </span>
-                    <LatencyBadge ms={ms} />
+                    <LatencyBadge ms={display.ms} />
                   </button>
                 </li>
               );

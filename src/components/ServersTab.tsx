@@ -12,10 +12,11 @@ import {
 import { ProfileCard } from "@/components/ProfileCard";
 import { SubscriptionsCard } from "@/components/SubscriptionsCard";
 import { cn } from "@/lib/utils";
-import type { Outbound, ParseFailure, SubscriptionSummary } from "@/lib/types";
+import type { ParseFailure, SubscriptionSummary } from "@/lib/types";
+import type { ConnectionProfile } from "@/lib/connectionProfiles";
 
 export interface ServersTabProps {
-  profiles: Outbound[];
+  profiles: ConnectionProfile[];
   parseErrors: ParseFailure[];
   /** Top-level error from the last Parse attempt (e.g. command-not-found). */
   parseError: string | null;
@@ -242,14 +243,31 @@ export function ServersTab({
             </div>
           ) : (
             <div className="space-y-1.5">
-              {profiles.map((o, i) => (
-                <ProfileCard
-                  key={`${o.protocol}-${i}-${"server" in o ? o.server : "x"}`}
-                  outbound={o}
-                  geoipByIp={geoipByIp}
-                  onRemove={() => onRemove(i)}
-                />
-              ))}
+              {profiles.map((profile, i) =>
+                profile.kind === "manual" ? (
+                  <ProfileCard
+                    key={`manual-${i}`}
+                    outbound={profile.outbound}
+                    geoipByIp={geoipByIp}
+                    onRemove={() => onRemove(i)}
+                  />
+                ) : (
+                  <div
+                    key={`subscription-${profile.reference.subscription_id}-${profile.reference.link_key}`}
+                    className="rounded-md border border-border bg-card/40 p-3"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                        {profile.protocol}
+                      </Badge>
+                      <span className="truncate text-sm font-medium">{profile.label}</span>
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-muted-foreground">
+                      Subscription link — resolved securely when connecting.
+                    </p>
+                  </div>
+                ),
+              )}
             </div>
           )}
         </CardContent>

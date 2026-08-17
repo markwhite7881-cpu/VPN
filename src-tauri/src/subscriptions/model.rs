@@ -54,7 +54,7 @@ impl SubscriptionErrorKind {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 pub struct SubscriptionRecord {
     pub id: String,
     pub name: String,
@@ -104,7 +104,7 @@ impl SubscriptionRecord {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, PartialEq)]
 pub struct ChildProfileRecord {
     pub key: String,
     pub name: String,
@@ -159,6 +159,8 @@ impl fmt::Debug for ChildProfileRecord {
 }
 
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderMetadata {
     #[serde(default)]
     pub profile_title: Option<String>,
     #[serde(default)]

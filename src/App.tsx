@@ -21,6 +21,11 @@ import { RoutingTab } from "@/components/routing/RoutingTab";
 import { TauriCommandError, api } from "@/lib/api";
 import { DEFAULT_SETTINGS } from "@/lib/defaults";
 import { loadManualProfiles, saveManualProfiles } from "@/lib/manualProfiles";
+import {
+  buildConnectionProfiles,
+  managedSelectionForProfile,
+  selectedManualOutbound,
+} from "@/lib/connectionProfiles";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useGeoIp } from "@/hooks/useGeoIp";
 import { isSupported } from "@/lib/outbound";
@@ -351,17 +356,19 @@ export default function App() {
     }
   }, [activeTab]);
 
-  // Backend-owned subscription profiles remain opaque to React. Manual
-  // profiles are still editable and continue to use the existing UI path.
-  const profiles = useMemo<Outbound[]>(() => manualProfiles, [manualProfiles]);
-
+  // Manual profiles retain their existing objects; subscription profiles are
+  // safe summaries carrying opaque backend references only.
+  const profiles = useMemo(
+    () => buildConnectionProfiles(manualProfiles, subs.snapshot),
+    [manualProfiles, subs.snapshot],
+  );
 
   // Online GeoIP fallback for servers the cheap heuristic in
   // `flagForProfile` couldn't resolve (no emoji, no Russian/English
   // name, no TLD). Hits ip-api.com once per uncached IP, then keeps
   // the result in localStorage forever. Lives after `profiles` is
   // declared because it takes the profile list as input.
-  const geoip = useGeoIp(profiles);
+  const geoip = useGeoIp(manualProfiles);
 
   const refresh = useCallback(async () => {
     if (!inTauri) {
@@ -528,9 +535,7 @@ export default function App() {
       //    sing-box boots goes straight through the picked server.
       //    No more `auto` urltest flash for the first packet.
       const managed = await api.startManaged({
-        manualOutbounds: manualProfiles,
-        subscriptionLinks: subs.snapshot.link_outbounds.flatMap((group) => group.links.map((link) => ({ subscription_id: group.subscription_id, link_key: link.key }))),
-        selectAllSubscriptionLinks: subs.snapshot.link_outbounds.length > 0,
+        ...managedSelectionForProfile(manualProfiles, profiles, selectedIndex),
         settings,
       });
       const path = managed.config_path;
@@ -565,7 +570,7 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [profiles, settings, refresh]);
+  }, [manualProfiles, profiles, selectedIndex, settings, refresh]);
 
   // Latest onStart, for handlers that need to call it after they've
   // already scheduled a state update (so the new settings object
@@ -723,14 +728,12 @@ export default function App() {
       // Resolve the new settings value up front, in two distinct
       // branches, so TypeScript's narrowing is happy in the async
       // closure below and the path is obvious for a human reader.
-      let pickedTag: string | null;
-      if (isAuto) {
-        pickedTag = null;
-      } else {
-        const profile = profiles[index];
-        if (!profile || !isSupported(profile)) return;
-        pickedTag = profile.tag;
-      }
+      const selectedManual = selectedManualOutbound(profiles, index);
+      const pickedTag = isAuto
+        ? null
+        : selectedManual && isSupported(selectedManual)
+          ? selectedManual.tag
+          : null;
       setSelectedIndex(index);
       setSettings((prev) => ({
         ...prev,
@@ -775,8 +778,13 @@ export default function App() {
   );
 
   const onRemoveProfile = useCallback((idx: number) => {
-    setManualProfiles((prev) => prev.filter((_, i) => i !== idx));
-  }, []);
+    const profile = profiles[idx];
+    if (!profile || profile.kind !== "manual") return;
+    const manualIndex = profiles
+      .slice(0, idx)
+      .filter((entry) => entry.kind === "manual").length;
+    setManualProfiles((prev) => prev.filter((_, index) => index !== manualIndex));
+  }, [profiles]);
 
   const onClearProfiles = useCallback(() => {
     setManualProfiles([]);
@@ -857,7 +865,7 @@ export default function App() {
             binary={binary}
             version={version}
             statusLabel={status.status}
-            profiles={profiles}
+            profiles={manualProfiles}
             settings={settings}
             onSettingsChange={setSettings}
             onResetSettings={() => setSettings(DEFAULT_SETTINGS)}
@@ -879,7 +887,7 @@ export default function App() {
             : undefined,
         content: (
           <RoutingTab
-            profiles={profiles}
+            profiles={manualProfiles}
             settings={settings}
             onSettingsChange={setSettings}
           />

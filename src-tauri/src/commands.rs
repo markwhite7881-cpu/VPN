@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::config::{self, GeneratorSettings};
@@ -154,6 +155,7 @@ pub async fn start_managed_singbox(
             .await?
     };
     outbounds.extend(subscription_outbounds);
+    let outbounds = deduplicate_outbounds(outbounds)?;
     let value = config::Config::build(&outbounds, &input.settings);
     let body = serde_json::to_vec_pretty(&value).map_err(AppError::Serde)?;
     let dir = app.path().temp_dir().unwrap_or_else(|_| std::env::temp_dir());
@@ -170,6 +172,23 @@ pub async fn start_managed_singbox(
         config_path: path.display().to_string(),
         profile_count: outbounds.len(),
     })
+}
+
+/// Deduplicate complete outbound definitions without exposing them outside
+/// Rust. Serialization is immediately hashed and never returned or logged.
+fn deduplicate_outbounds(outbounds: Vec<Outbound>) -> AppResult<Vec<Outbound>> {
+    use std::collections::HashSet;
+
+    let mut seen = HashSet::new();
+    let mut unique = Vec::with_capacity(outbounds.len());
+    for outbound in outbounds {
+        let encoded = serde_json::to_vec(&outbound).map_err(AppError::Serde)?;
+        let digest = format!("{:x}", Sha256::digest(encoded));
+        if seen.insert(digest) {
+            unique.push(outbound);
+        }
+    }
+    Ok(unique)
 }
 
 #[tauri::command]
@@ -863,6 +882,35 @@ pub async fn apply_singbox_update(
     expected_version: Option<String>,
 ) -> AppResult<String> {
     crate::updates::apply_singbox_update(app, expected_version).await
+}
+
+#[cfg(test)]
+mod managed_launch_tests {
+    use super::deduplicate_outbounds;
+    use crate::parser::Outbound;
+
+    #[test]
+    fn deduplicates_manual_and_subscription_outbounds_in_first_seen_order() {
+        let manual = Outbound::Unsupported {
+            raw: "manual-first".into(),
+            reason: "test".into(),
+        };
+        let subscription = Outbound::Unsupported {
+            raw: "subscription-second".into(),
+            reason: "test".into(),
+        };
+        let unique = deduplicate_outbounds(vec![
+            manual.clone(),
+            manual,
+            subscription.clone(),
+            subscription,
+        ])
+        .unwrap();
+
+        assert_eq!(unique.len(), 2);
+        assert!(matches!(unique[0], Outbound::Unsupported { ref raw, .. } if raw == "manual-first"));
+        assert!(matches!(unique[1], Outbound::Unsupported { ref raw, .. } if raw == "subscription-second"));
+    }
 }
 
 #[cfg(test)]
