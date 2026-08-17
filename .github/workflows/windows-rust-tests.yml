@@ -37,8 +37,69 @@ jobs:
       - name: Compile Rust library tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib --no-run
 
-      - name: Run Rust library tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
+      - name: Run Rust library tests and capture Windows loader diagnostic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $test = Get-ChildItem -Path 'src-tauri\target\debug\deps' `
+            -Filter 'cloakwire_lib-*.exe' -File |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+
+          if (-not $test) {
+            throw 'Could not locate src-tauri\target\debug\deps\cloakwire_lib-*.exe after cargo test --no-run.'
+          }
+
+          Write-Host "Launching test binary: $($test.FullName)"
+          $started = (Get-Date).ToUniversalTime()
+
+          & $test.FullName --nocapture
+          $testExit = $LASTEXITCODE
+
+          if (Get-Command Get-WinEvent -ErrorAction SilentlyContinue) {
+            $namePattern = [regex]::Escape($test.Name)
+            $stemPattern = [regex]::Escape($test.BaseName)
+
+            $events = foreach ($log in 'System', 'Application') {
+              try {
+                Get-WinEvent -FilterHashtable @{
+                  LogName   = $log
+                  StartTime = $started.AddSeconds(-5)
+                } -MaxEvents 200 |
+                  Where-Object {
+                    $_.Id -eq 26 -or
+                    $_.ProviderName -in 'Application Error', 'Windows Error Reporting'
+                  }
+              }
+              catch {
+                Write-Warning "Could not read $log event log: $($_.Exception.Message)"
+              }
+            }
+
+            $matching = $events |
+              Where-Object {
+                $_.Message -match $namePattern -or $_.Message -match $stemPattern
+              } |
+              Sort-Object TimeCreated -Descending -Unique
+
+            if ($matching) {
+              Write-Host '--- Windows launch diagnostic ---'
+              $matching |
+                Format-List TimeCreated, LogName, ProviderName, Id, LevelDisplayName, Message |
+                Out-String -Width 240 |
+                Write-Host
+              Write-Host '--- End Windows launch diagnostic ---'
+            }
+            else {
+              Write-Warning 'No matching Windows Application Popup / WER event was found. The runner did not expose the loader message in its event logs.'
+            }
+          }
+          else {
+            Write-Warning 'Get-WinEvent is unavailable; skipped Windows event-log diagnostic.'
+          }
+
+          exit $testExit
 
       - name: Check working tree diff
         shell: pwsh
