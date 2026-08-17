@@ -466,9 +466,15 @@ pub async fn check_config_with_binary(
 // --- Clash API ---------------------------------------------------------
 
 async fn api_url(pm: &ProcessManager) -> AppResult<String> {
+    let status = pm.snapshot_status().await;
+    if status.engine != Some(EngineKind::Singbox) {
+        return Err(AppError::Clash("sing-box is not running".to_string()));
+    }
     match pm.controller_url().await {
-        Some(u) => Ok(u),
-        None => Err(AppError::Clash("sing-box is not running".to_string())),
+        Some(url) => Ok(url),
+        None => Err(AppError::Clash(
+            "sing-box controller is unavailable".to_string(),
+        )),
     }
 }
 

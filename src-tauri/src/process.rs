@@ -195,13 +195,15 @@ impl ProcessManager {
         };
         self.push_log(LogStream::System, label).await;
         if spec.engine == EngineKind::Singbox {
-            if let Err(msg) = check_tun_capabilities(&spec.binary, &spec.config_path).await {
+            if let Err(_msg) = check_tun_capabilities(&spec.binary, &spec.config_path).await {
                 self.push_log(
                     LogStream::System,
-                    format!("TUN capability check failed: {msg}"),
+                    "TUN capability check failed: could not read runtime configuration",
                 )
                 .await;
-                return Err(AppError::TunCapabilities(msg));
+                return Err(AppError::TunCapabilities(
+                    "could not read runtime configuration".into(),
+                ));
             }
         }
         let mut cmd = Command::new(&spec.binary);
@@ -223,8 +225,8 @@ impl ProcessManager {
             let config_path = spec.config_path.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                if let Err(e) = set_tun_dns_from_config(&config_path).await {
-                    log::warn!("failed to set TUN adapter DNS: {e}");
+                if let Err(_error) = set_tun_dns_from_config(&config_path).await {
+                    log::warn!("could not read runtime configuration for TUN DNS setup");
                 }
             });
         }
@@ -249,8 +251,8 @@ impl ProcessManager {
         *self.child.lock().await = Some(child);
         *self.started_at.lock().await = Some(std::time::Instant::now());
         *self.current_config.lock().await = Some(spec.config_path);
-        *self.controller_url.lock().await = spec.controller_url.clone();
         if spec.engine == EngineKind::Singbox {
+            *self.controller_url.lock().await = spec.controller_url.clone();
             if let (Some(controller_url), Some(app)) = (spec.controller_url.clone(), app.cloned()) {
                 let traffic = Arc::clone(&self.traffic);
                 tokio::spawn(async move {
@@ -305,14 +307,21 @@ impl ProcessManager {
             return Err(AppError::NotRunning);
         };
 
-        {
+        let engine = {
             let mut status = self.status.lock().await;
             status.status = Status::Stopping;
-        }
-        self.push_log(LogStream::System, "stopping sing-box").await;
+            status.engine
+        };
+        let label = match engine {
+            Some(EngineKind::Xray) => "stopping Xray",
+            _ => "stopping sing-box",
+        };
+        self.push_log(LogStream::System, label).await;
 
-        // Stop the traffic stream first so the WS task exits cleanly.
-        self.traffic.stop().await;
+        // The traffic stream belongs exclusively to sing-box's Clash controller.
+        if engine == Some(EngineKind::Singbox) {
+            self.traffic.stop().await;
+        }
 
         // Try graceful first.
         let _ = child.start_kill();
@@ -371,6 +380,9 @@ impl ProcessManager {
     }
 
     pub async fn controller_url(&self) -> Option<String> {
+        if self.status.lock().await.engine != Some(EngineKind::Singbox) {
+            return None;
+        }
         self.controller_url.lock().await.clone()
     }
 
@@ -419,6 +431,10 @@ impl ProcessManager {
     /// current session was a TUN-only run).
     async fn finalize_exit(&self, code: Option<i32>, err: Option<String>) {
         let mut status = self.status.lock().await;
+        let engine_label = match status.engine {
+            Some(EngineKind::Xray) => "Xray",
+            _ => "sing-box",
+        };
         status.status = Status::Stopped;
         status.pid = None;
         status.uptime_secs = None;
@@ -429,10 +445,11 @@ impl ProcessManager {
         status.profile_name = None;
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
+        *self.controller_url.lock().await = None;
         let line = match (&err, code) {
-            (Some(e), _) => format!("sing-box exited unexpectedly: {e}"),
-            (None, Some(c)) if c != 0 => format!("sing-box exited with code {c}"),
-            (None, _) => "sing-box stopped".to_string(),
+            (Some(e), _) => format!("{engine_label} exited unexpectedly: {e}"),
+            (None, Some(c)) if c != 0 => format!("{engine_label} exited with code {c}"),
+            (None, _) => format!("{engine_label} stopped"),
         };
         drop(status);
         self.push_log(LogStream::System, line).await;
@@ -818,9 +835,9 @@ async fn set_tun_dns_from_config(config_path: &Path) -> Result<(), String> {
     {
         let content = tokio::fs::read_to_string(config_path)
             .await
-            .map_err(|e| format!("read config {config_path:?}: {e}"))?;
-        let json: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| format!("parse config JSON: {e}"))?;
+            .map_err(|_| "could not read runtime configuration".to_string())?;
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .map_err(|_| "runtime configuration is invalid".to_string())?;
 
         // Pull the local-DNS server out of `dns.servers[0]`. Falls back
         // to 1.1.1.1 if for any reason the field is missing (e.g. a
@@ -907,9 +924,9 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
     //    "None" modes don't need cap_net_admin.
     let content = tokio::fs::read_to_string(config_path)
         .await
-        .map_err(|e| format!("read config {}: {e}", config_path.display()))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| format!("parse config JSON: {e}"))?;
+        .map_err(|_| "could not read runtime configuration".to_string())?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|_| "runtime configuration is invalid".to_string())?;
     let has_tun = json
         .get("inbounds")
         .and_then(|i| i.as_array())
@@ -945,10 +962,7 @@ async fn check_tun_capabilities(binary: &Path, config_path: &Path) -> Result<(),
     //       /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
     //    TUN requires both capabilities; a partial report must be rejected.
     if output.status.success() && has_required_tun_capabilities(&stdout) {
-        log::info!(
-            "sing-box {} has cap_net_admin and cap_net_raw — TUN mode is ready",
-            binary.display()
-        );
+        log::info!("sing-box TUN capabilities are ready");
         return Ok(());
     }
 
@@ -1110,10 +1124,15 @@ mod engine_runtime_tests {
     fn test_xray_spec() -> LaunchSpec {
         LaunchSpec {
             engine: EngineKind::Xray,
-            binary: PathBuf::from("xray-test-binary"),
-            args: vec![OsString::from("run")],
+            binary: PathBuf::from("powershell.exe"),
+            args: vec![
+                OsString::from("-NoProfile"),
+                OsString::from("-NonInteractive"),
+                OsString::from("-Command"),
+                OsString::from("Start-Sleep -Seconds 60"),
+            ],
             config_path: PathBuf::from("xray-test-config.json"),
-            controller_url: None,
+            controller_url: Some("http://controller.test".into()),
             profile_key: Some("test-xray".into()),
             profile_name: Some("Test Xray".into()),
         }
@@ -1127,6 +1146,36 @@ mod engine_runtime_tests {
         let err = pm.start_spec(test_xray_spec()).await.unwrap_err();
 
         assert!(matches!(err, AppError::AlreadyRunning(_)));
+    }
+
+    #[tokio::test]
+    async fn xray_launch_does_not_expose_a_clash_controller() {
+        let pm = Arc::new(ProcessManager::new());
+        pm.start_spec(test_xray_spec()).await.unwrap();
+
+        assert_eq!(pm.controller_url().await, None);
+        pm.stop().await.unwrap();
+        assert_eq!(pm.controller_url().await, None);
+    }
+
+    #[tokio::test]
+    async fn xray_exit_uses_xray_label_and_clears_metadata() {
+        let pm = ProcessManager::new();
+        {
+            let mut status = pm.status.lock().await;
+            status.engine = Some(EngineKind::Xray);
+            status.profile_key = Some("profile".into());
+            status.profile_name = Some("Xray profile".into());
+        }
+
+        pm.finalize_exit(Some(0), None).await;
+
+        let logs = pm.snapshot_logs(1).await;
+        assert_eq!(logs[0].line, "Xray stopped");
+        let status = pm.snapshot_status().await;
+        assert_eq!(status.engine, None);
+        assert_eq!(status.profile_key, None);
+        assert_eq!(status.profile_name, None);
     }
 
     #[test]
