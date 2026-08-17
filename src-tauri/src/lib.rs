@@ -19,6 +19,7 @@ pub mod app_update;
 pub mod clash_api;
 pub mod commands;
 pub mod config;
+pub mod engine;
 pub mod error;
 pub mod parser;
 pub mod process;
@@ -107,8 +108,10 @@ pub fn run() {
             commands::get_singbox_version,
             commands::check_config,
             commands::start_singbox,
+            commands::start_connection,
             commands::start_managed_singbox,
             commands::stop_singbox,
+            commands::stop_connection,
             commands::get_status,
             commands::get_logs,
             commands::is_running,

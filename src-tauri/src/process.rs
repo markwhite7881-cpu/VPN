@@ -12,16 +12,18 @@
 //!   that with no extra ceremony.
 
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+use crate::engine::{EngineKind, LaunchSpec};
 use crate::error::{AppError, AppResult};
 use crate::traffic::TrafficStream;
 
@@ -62,6 +64,9 @@ pub struct StatusReport {
     pub uptime_secs: Option<u64>,
     pub last_exit_code: Option<i32>,
     pub last_error: Option<String>,
+    pub engine: Option<EngineKind>,
+    pub profile_key: Option<String>,
+    pub profile_name: Option<String>,
 }
 
 impl Default for StatusReport {
@@ -72,6 +77,9 @@ impl Default for StatusReport {
             uptime_secs: None,
             last_exit_code: None,
             last_error: None,
+            engine: None,
+            profile_key: None,
+            profile_name: None,
         }
     }
 }
@@ -131,111 +139,44 @@ impl ProcessManager {
         self.status.lock().await.clone()
     }
 
+    #[cfg(test)]
+    pub async fn install_test_child(&self, engine: EngineKind) {
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 60",
+        ]);
+        let child = cmd.spawn().expect("test child starts");
+        let pid = child.id();
+        *self.child.lock().await = Some(child);
+        let mut status = self.status.lock().await;
+        status.status = Status::Running;
+        status.pid = pid;
+        status.engine = Some(engine);
+    }
+
     pub async fn snapshot_logs(&self, limit: usize) -> Vec<LogLine> {
         let logs = self.logs.lock().await;
         let start = logs.len().saturating_sub(limit);
         logs.iter().skip(start).cloned().collect()
     }
 
-    /// Find the bundled sing-box binary.
-    ///
-    /// Order:
-    /// 1. `SINGBOX_BIN` env override (useful for tests / custom builds).
-    /// 2. `<app_data_dir>/singbox-runtime/sing-box.exe` — the
-    ///    user-writable copy placed by the sing-box auto-update
-    ///    (see `updates::apply_singbox_update`). This is what the
-    ///    user gets after they accept an auto-update.
-    /// 3. `<resource_dir>/binaries/sing-box[-<triple>]` (release).
-    /// 4. Walk upwards from `CARGO_MANIFEST_DIR` to find
-    ///    `src-tauri/binaries/sing-box-<triple>` (dev).
+    /// Find the bundled sing-box binary using the established search order.
     pub fn locate_binary(app: &AppHandle) -> AppResult<PathBuf> {
-        if let Ok(p) = std::env::var("SINGBOX_BIN") {
-            let p = PathBuf::from(p);
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-
-        // User-writable runtime copy (set by updates::apply_singbox_update).
-        // On a fresh install this doesn't exist, so we fall through to
-        // the bundled binary. After an auto-update it wins, which is
-        // exactly what the user wants — the "newer" version is the
-        // one they accepted.
-        if let Ok(p) = crate::updates::runtime_bin_path(app) {
-            if p.exists() {
-                return Ok(p);
-            }
-        }
-
-        let triple = current_target_triple();
-        let exe_name = if cfg!(windows) {
-            format!("sing-box-{triple}.exe")
-        } else {
-            format!("sing-box-{triple}")
-        };
-        let plain_name = if cfg!(windows) {
-            "sing-box.exe".to_string()
-        } else {
-            "sing-box".to_string()
-        };
-
-        // First: same directory as the running executable. On a Linux
-        // .deb install, Tauri 2 puts both the main binary and the
-        // sidecar in `/usr/bin/` (no `/usr/lib/<pkg>/binaries/`), so
-        // this is the only place to look. On Windows NSIS / MSI the
-        // same pattern holds. We do this BEFORE the `resource_dir`
-        // lookup because on Linux the resource_dir path simply does
-        // not exist.
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                for name in [&exe_name, &plain_name] {
-                    let p = dir.join(name);
-                    if p.exists() {
-                        return Ok(p);
-                    }
-                }
-            }
-        }
-
-        // Release: resource_dir/binaries/...
-        if let Ok(resource_dir) = app.path().resource_dir() {
-            for name in [&exe_name, &plain_name] {
-                let p = resource_dir.join("binaries").join(name);
-                if p.exists() {
-                    return Ok(p);
-                }
-            }
-        }
-
-        // Dev: walk upwards from the manifest dir (src-tauri) to find binaries/.
-        if let Some(manifest) = option_env!("CARGO_MANIFEST_DIR") {
-            let manifest = PathBuf::from(manifest);
-            // try: src-tauri/binaries/, ../src-tauri/binaries/, etc.
-            let mut cursor: Option<&Path> = Some(manifest.as_path());
-            for _ in 0..4 {
-                let Some(dir) = cursor else { break };
-                for name in [&exe_name, &plain_name] {
-                    let p = dir.join("binaries").join(name);
-                    if p.exists() {
-                        return Ok(p);
-                    }
-                }
-                cursor = dir.parent();
-            }
-        }
-
-        Err(AppError::BinaryNotFound(format!(
-            "expected one of: {exe_name}, {plain_name}"
-        )))
+        crate::engine::singbox::locate_binary(app)
     }
 
-    /// Start sing-box with the given config file.
-    pub async fn start(
+    /// Start exactly one backend-owned engine process.
+    pub async fn start_spec(self: &Arc<Self>, spec: LaunchSpec) -> AppResult<StatusReport> {
+        self.start_spec_with_app(None, spec).await
+    }
+
+    pub async fn start_spec_with_app(
         self: &Arc<Self>,
-        app: &AppHandle,
-        binary: &Path,
-        config_path: &Path,
-        controller_url: Option<String>,
+        app: Option<&AppHandle>,
+        spec: LaunchSpec,
     ) -> AppResult<StatusReport> {
         {
             let mut status = self.status.lock().await;
@@ -248,126 +189,112 @@ impl ProcessManager {
             status.status = Status::Starting;
             status.last_error = None;
         }
-        self.push_log(
-            LogStream::System,
-            format!("starting sing-box with config {}", config_path.display()),
-        )
-        .await;
-
-        let mut cmd = Command::new(binary);
-        cmd.arg("run")
-            .arg("-c")
-            .arg(config_path)
+        let label = match spec.engine {
+            EngineKind::Singbox => "starting sing-box profile",
+            EngineKind::Xray => "starting Xray profile",
+        };
+        self.push_log(LogStream::System, label).await;
+        if spec.engine == EngineKind::Singbox {
+            if let Err(msg) = check_tun_capabilities(&spec.binary, &spec.config_path).await {
+                self.push_log(
+                    LogStream::System,
+                    format!("TUN capability check failed: {msg}"),
+                )
+                .await;
+                return Err(AppError::TunCapabilities(msg));
+            }
+        }
+        let mut cmd = Command::new(&spec.binary);
+        cmd.args(&spec.args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true);
-        // Don't pop a console window on Windows release builds.
         #[cfg(windows)]
         {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-
-        // On Linux, TUN mode requires the sing-box binary itself to hold
-        // `cap_net_admin` + `cap_net_raw` (it opens `/dev/net/tun` and
-        // configures addresses / routes via netlink, all of which need
-        // admin caps). The .deb's postinst applies these via `setcap`
-        // on install, but they can be stripped by an `apt upgrade`
-        // race, a manual `chmod`, or a package re-install. Detect the
-        // situation up front and surface a clear remediation message
-        // instead of letting sing-box die with "operation not
-        // permitted" half a second later. Best-effort: missing
-        // `getcap` or a non-TUN config are no-ops.
-        if let Err(msg) = check_tun_capabilities(binary, config_path).await {
-            self.push_log(
-                LogStream::System,
-                format!("TUN capability check failed: {msg}"),
-            )
-            .await;
-            return Err(AppError::TunCapabilities(msg));
-        }
-
         let mut child = cmd
             .spawn()
-            .map_err(|e| AppError::Spawn(format!("{}: {e}", binary.display())))?;
+            .map_err(|e| AppError::Spawn(format!("{}: {e}", spec.binary.display())))?;
         let pid = child.id();
-
-        // After sing-box brings the TUN interface up, explicitly assign
-        // the OS-level DNS server on that interface. Without this,
-        // Windows auto-derives a DNS server from the TUN's own address
-        // range (e.g. 172.19.0.1/30 → 172.19.0.2), treats it as an
-        // on-link neighbour, and tries ARP/Neighbor Discovery instead
-        // of routing — the ARP never succeeds, the DNS query never
-        // reaches sing-box, and `Resolve-DnsName` (or any direct DNS
-        // call by an app) hangs until timeout. Setting an external IP
-        // (e.g. 77.88.8.8) as the adapter's DNS server forces
-        // Windows to route the query normally through the TUN →
-        // sing-box → upstream.
-        //
-        // We fire-and-forget this on a separate task with a small
-        // delay so it doesn't block sing-box's own startup, and so
-        // the TUN interface has time to be created by the kernel
-        // driver before we try to mutate it.
-        let config_path_for_dns = config_path.to_path_buf();
-        tokio::spawn(async move {
-            // TUN creation typically takes < 100 ms on Windows;
-            // 500 ms is a safe margin without making the user wait.
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            if let Err(e) = set_tun_dns_from_config(&config_path_for_dns).await {
-                log::warn!("failed to set TUN adapter DNS: {e}");
-            }
-        });
-
-        // Wire stdout/stderr into the log buffer.
+        if spec.engine == EngineKind::Singbox {
+            let config_path = spec.config_path.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if let Err(e) = set_tun_dns_from_config(&config_path).await {
+                    log::warn!("failed to set TUN adapter DNS: {e}");
+                }
+            });
+        }
         if let Some(stdout) = child.stdout.take() {
-            let me = Arc::clone(self);
+            let manager = Arc::clone(self);
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    me.push_log(LogStream::Stdout, line).await;
+                    manager.push_log(LogStream::Stdout, line).await;
                 }
             });
         }
         if let Some(stderr) = child.stderr.take() {
-            let me = Arc::clone(self);
+            let manager = Arc::clone(self);
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    me.push_log(LogStream::Stderr, line).await;
+                    manager.push_log(LogStream::Stderr, line).await;
                 }
             });
         }
-
-        // Stash the child + bookkeeping.
-        {
-            let mut guard = self.child.lock().await;
-            *guard = Some(child);
-        }
+        *self.child.lock().await = Some(child);
         *self.started_at.lock().await = Some(std::time::Instant::now());
-        *self.current_config.lock().await = Some(config_path.to_path_buf());
-        *self.controller_url.lock().await = controller_url.clone();
-
-        // Auto-start the traffic stream whenever we have a controller
-        // URL. The stream emits `traffic` events to the webview.
-        if let Some(url) = controller_url {
-            let stream = Arc::clone(&self.traffic);
-            let app_for_stream = app.clone();
-            // Spawn the start on a fire-and-forget task; we don't
-            // surface failures here — the stream has its own
-            // exponential backoff inside.
-            tokio::spawn(async move {
-                if let Err(e) = stream.start(app_for_stream, &url).await {
-                    log::warn!("traffic stream start failed: {e}");
-                }
-            });
+        *self.current_config.lock().await = Some(spec.config_path);
+        *self.controller_url.lock().await = spec.controller_url.clone();
+        if spec.engine == EngineKind::Singbox {
+            if let (Some(controller_url), Some(app)) = (spec.controller_url.clone(), app.cloned()) {
+                let traffic = Arc::clone(&self.traffic);
+                tokio::spawn(async move {
+                    if let Err(e) = traffic.start(app, &controller_url).await {
+                        log::warn!("traffic stream start failed: {e}");
+                    }
+                });
+            }
         }
-
         let mut status = self.status.lock().await;
         status.status = Status::Running;
         status.pid = pid;
         status.last_exit_code = None;
+        status.engine = Some(spec.engine);
+        status.profile_key = spec.profile_key;
+        status.profile_name = spec.profile_name;
         Ok(status.clone())
+    }
+
+    /// Compatibility route for existing sing-box callers.
+    pub async fn start(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        binary: &Path,
+        config_path: &Path,
+        controller_url: Option<String>,
+    ) -> AppResult<StatusReport> {
+        self.start_spec_with_app(
+            Some(app),
+            LaunchSpec {
+                engine: EngineKind::Singbox,
+                binary: binary.to_path_buf(),
+                args: vec![
+                    OsString::from("run"),
+                    OsString::from("-c"),
+                    config_path.as_os_str().to_os_string(),
+                ],
+                config_path: config_path.to_path_buf(),
+                controller_url,
+                profile_key: None,
+                profile_name: None,
+            },
+        )
+        .await
     }
 
     /// Stop the running sing-box. Graceful: send SIGTERM/taskkill, then
@@ -497,6 +424,9 @@ impl ProcessManager {
         status.uptime_secs = None;
         status.last_exit_code = code;
         status.last_error = err.clone();
+        status.engine = None;
+        status.profile_key = None;
+        status.profile_name = None;
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
         let line = match (&err, code) {
@@ -554,12 +484,6 @@ impl ProcessManager {
             }
         });
     }
-}
-
-fn current_target_triple() -> &'static str {
-    // We can't easily query rustc at runtime, so we use the build-time hint.
-    // The CARGO_CFG_TARGET_TRIPLE env var is set during build.
-    option_env!("CARGO_CFG_TARGET_TRIPLE").unwrap_or("x86_64-pc-windows-msvc")
 }
 
 // --- System proxy management ---------------------------------------
@@ -1174,6 +1098,44 @@ mod reset_tests {
             .await;
 
         assert_eq!(manager.snapshot_status().await.status, Status::Stopped);
+    }
+}
+
+#[cfg(test)]
+mod engine_runtime_tests {
+    use super::*;
+    use crate::subscriptions::EngineKind;
+    use std::ffi::OsString;
+
+    fn test_xray_spec() -> LaunchSpec {
+        LaunchSpec {
+            engine: EngineKind::Xray,
+            binary: PathBuf::from("xray-test-binary"),
+            args: vec![OsString::from("run")],
+            config_path: PathBuf::from("xray-test-config.json"),
+            controller_url: None,
+            profile_key: Some("test-xray".into()),
+            profile_name: Some("Test Xray".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_rejects_second_engine_while_first_is_active() {
+        let pm = Arc::new(ProcessManager::new());
+        pm.install_test_child(EngineKind::Singbox).await;
+
+        let err = pm.start_spec(test_xray_spec()).await.unwrap_err();
+
+        assert!(matches!(err, AppError::AlreadyRunning(_)));
+    }
+
+    #[test]
+    fn stopped_status_has_no_engine_or_profile() {
+        let status = StatusReport::default();
+
+        assert_eq!(status.engine, None);
+        assert_eq!(status.profile_key, None);
+        assert_eq!(status.profile_name, None);
     }
 }
 

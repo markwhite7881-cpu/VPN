@@ -57,6 +57,9 @@ export const api = {
   checkConfig: (configPath: string) =>
     call<string>("check_config", { configPath }),
 
+  startConnection: (configPath: string, controllerUrl?: string) =>
+    call<StatusReport>("start_connection", { configPath, controllerUrl }),
+  stopConnection: () => call<StatusReport>("stop_connection"),
   start: (configPath: string) =>
     call<StatusReport>("start_singbox", { configPath }),
   startManaged: (input: { manualOutbounds: Outbound[]; subscriptionLinks?: SubscriptionLinkRef[]; selectAllSubscriptionLinks: boolean; settings: GeneratorSettings }) =>

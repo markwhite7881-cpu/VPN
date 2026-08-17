@@ -34,6 +34,9 @@ export interface StatusReport {
   uptime_secs: number | null;
   last_exit_code: number | null;
   last_error: string | null;
+  engine?: EngineKind | null;
+  profile_key?: string | null;
+  profile_name?: string | null;
 }
 
 export interface LogLine {

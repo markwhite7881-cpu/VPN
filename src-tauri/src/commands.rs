@@ -3,6 +3,7 @@
 //! Every command is async and returns `AppResult<T>`. The frontend
 //! sees errors as `{ kind, message }` (see error.rs).
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -11,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 
 use crate::config::{self, GeneratorSettings};
+use crate::engine::{singbox, EngineKind, LaunchSpec};
 use crate::error::{AppError, AppResult};
 use crate::parser::{self, Outbound};
 use crate::process::{LogLine, ProcessManager, StatusReport};
@@ -36,7 +38,7 @@ pub struct BinaryInfo {
 
 #[tauri::command]
 pub async fn get_binary_info(app: AppHandle) -> AppResult<BinaryInfo> {
-    match ProcessManager::locate_binary(&app) {
+    match singbox::locate_binary(&app) {
         Ok(p) => {
             let meta = std::fs::metadata(&p).ok();
             Ok(BinaryInfo {
@@ -55,7 +57,7 @@ pub async fn get_binary_info(app: AppHandle) -> AppResult<BinaryInfo> {
 
 #[tauri::command]
 pub async fn get_singbox_version(app: AppHandle) -> AppResult<SingboxVersion> {
-    let binary = ProcessManager::locate_binary(&app)?;
+    let binary = singbox::locate_binary(&app)?;
     // `sing-box version` is a console-mode binary; without CREATE_NO_WINDOW
     // it pops a black CMD window for a fraction of a second every time
     // the frontend polls. Hide it the same way we do for the long-lived
@@ -73,21 +75,10 @@ pub async fn get_singbox_version(app: AppHandle) -> AppResult<SingboxVersion> {
         .map_err(|e| AppError::Spawn(format!("version probe failed: {e}")))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let mut version = String::new();
-    let mut env = String::new();
-    let mut revision = String::new();
-    for line in stdout.lines() {
-        if let Some(rest) = line.strip_prefix("sing-box version ") {
-            version = rest.trim().to_string();
-        } else if let Some(rest) = line.strip_prefix("Environment: ") {
-            env = rest.trim().to_string();
-        } else if let Some(rest) = line.strip_prefix("Revision: ") {
-            revision = rest.trim().to_string();
-        }
-    }
+    let (version, environment, revision) = singbox::parse_version(&stdout);
     Ok(SingboxVersion {
         version,
-        environment: env,
+        environment,
         revision,
         raw: stdout,
     })
@@ -95,11 +86,11 @@ pub async fn get_singbox_version(app: AppHandle) -> AppResult<SingboxVersion> {
 
 #[tauri::command]
 pub async fn check_config(app: AppHandle, config_path: String) -> AppResult<String> {
-    let binary = ProcessManager::locate_binary(&app)?;
+    let binary = singbox::locate_binary(&app)?;
     // Same CREATE_NO_WINDOW dance — `sing-box check -c <path>` is a
     // short-lived console-mode spawn and otherwise flashes a CMD window.
     let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg("check").arg("-c").arg(&config_path);
+    cmd.args(singbox::check_args(PathBuf::from(&config_path).as_path()));
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -166,8 +157,8 @@ pub async fn start_managed_singbox(
     let path = dir.join("config.managed.json");
     std::fs::write(&path, body).map_err(AppError::Io)?;
     let controller_url = format!("http://{}", input.settings.clash_api.external_controller);
-    let binary = ProcessManager::locate_binary(&app)?;
-    let status = pm.start(&app, &binary, &path, Some(controller_url)).await?;
+    let status =
+        start_connection(app, pm, path.display().to_string(), Some(controller_url)).await?;
     Ok(ManagedLaunchResult {
         status,
         config_path: path.display().to_string(),
@@ -193,12 +184,45 @@ fn deduplicate_outbounds(outbounds: Vec<Outbound>) -> AppResult<Vec<Outbound>> {
 }
 
 #[tauri::command]
+pub async fn start_connection(
+    app: AppHandle,
+    pm: State<'_, Arc<ProcessManager>>,
+    config_path: String,
+    controller_url: Option<String>,
+) -> AppResult<StatusReport> {
+    let config_path = PathBuf::from(config_path);
+    if !config_path.exists() {
+        return Err(AppError::WriteConfig("config file does not exist".into()));
+    }
+    let binary = singbox::locate_binary(&app)?;
+    let spec = LaunchSpec {
+        engine: EngineKind::Singbox,
+        binary,
+        args: vec![
+            OsString::from("run"),
+            OsString::from("-c"),
+            config_path.as_os_str().to_os_string(),
+        ],
+        config_path,
+        controller_url,
+        profile_key: None,
+        profile_name: None,
+    };
+    pm.start_spec_with_app(Some(&app), spec).await
+}
+
+#[tauri::command]
+pub async fn stop_connection(pm: State<'_, Arc<ProcessManager>>) -> AppResult<StatusReport> {
+    pm.stop().await
+}
+
+#[tauri::command]
 pub async fn start_singbox(
     app: AppHandle,
     pm: State<'_, Arc<ProcessManager>>,
     config_path: String,
 ) -> AppResult<StatusReport> {
-    start_singbox_with_config(app, pm, config_path, None).await
+    start_connection(app, pm, config_path, None).await
 }
 
 /// Like `start_singbox` but also records the Clash API controller URL
@@ -210,19 +234,12 @@ pub async fn start_singbox_with_config(
     config_path: String,
     controller_url: Option<String>,
 ) -> AppResult<StatusReport> {
-    let binary = ProcessManager::locate_binary(&app)?;
-    let cfg = PathBuf::from(&config_path);
-    if !cfg.exists() {
-        return Err(AppError::WriteConfig(format!(
-            "config file does not exist: {config_path}"
-        )));
-    }
-    pm.start(&app, &binary, &cfg, controller_url).await
+    start_connection(app, pm, config_path, controller_url).await
 }
 
 #[tauri::command]
 pub async fn stop_singbox(pm: State<'_, Arc<ProcessManager>>) -> AppResult<StatusReport> {
-    pm.stop().await
+    stop_connection(pm).await
 }
 
 #[tauri::command]
