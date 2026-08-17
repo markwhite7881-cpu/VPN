@@ -13,7 +13,8 @@ fn main() {
     // We read the manifest from `app.manifest` at build time so the
     // XML stays in its own file (easier to read / validate) instead
     // of being embedded as a raw string in build.rs.
-    let mut attrs = tauri_build::Attributes::new();
+    let mut attrs = tauri_build::Attributes::new().plugin("vpn", tauri_build::InlinedPlugin::new());
+    println!("cargo:rerun-if-changed=permissions");
     #[cfg(windows)]
     {
         let manifest_path = std::path::Path::new("app.manifest");

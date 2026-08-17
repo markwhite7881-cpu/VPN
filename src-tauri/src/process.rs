@@ -566,6 +566,16 @@ fn current_target_triple() -> &'static str {
 // Windows uses WinINET registry keys, Linux uses desktop-environment
 // commands, and macOS uses `networksetup` per active network service.
 
+#[cfg(target_os = "android")]
+pub fn apply_system_proxy(_host: &str, _port: u16) -> AppResult<()> {
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+pub fn clear_system_proxy() -> AppResult<()> {
+    Ok(())
+}
+
 #[cfg(windows)]
 pub fn apply_system_proxy(host: &str, port: u16) -> AppResult<()> {
     use winreg::enums::*;

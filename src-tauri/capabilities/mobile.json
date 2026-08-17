@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "Capabilities for the Cloakwire Android mobile app",
+  "permissions": [
+    "core:default",
+    "vpn:default"
+  ]
+}

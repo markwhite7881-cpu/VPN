@@ -51,6 +51,9 @@ pub enum AppError {
     #[error("network error: {0}")]
     Network(String),
 
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+
     #[error("tauri error: {0}")]
     Tauri(#[from] tauri::Error),
 }
@@ -74,6 +77,7 @@ impl Serialize for AppError {
             AppError::Serde(_) => ("serde", self.to_string()),
             AppError::Clash(_) => ("clash", self.to_string()),
             AppError::Network(_) => ("network", self.to_string()),
+            AppError::Unsupported(_) => ("unsupported", self.to_string()),
             AppError::Tauri(_) => ("tauri", self.to_string()),
         };
         let mut st = s.serialize_struct("AppError", 2)?;
@@ -84,3 +88,20 @@ impl Serialize for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+    use serde_json::json;
+
+    #[test]
+    fn serializes_unsupported_autostart_error() {
+        assert_eq!(
+            serde_json::to_value(AppError::Unsupported("autostart".into())).unwrap(),
+            json!({
+                "kind": "unsupported",
+                "message": "unsupported: autostart",
+            })
+        );
+    }
+}

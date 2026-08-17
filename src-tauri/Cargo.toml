@@ -44,7 +44,6 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-autostart = "2"
 minisign = "0.9"
 
 serde = { version = "1", features = ["derive"] }
@@ -92,6 +91,9 @@ base64 = "0.22"
 # that worked on Windows because cfg(windows) accidentally included
 # it, and broke on Linux where the dep was missing entirely.)
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-autostart = "2"
 
 # Windows-only deps. We use #[cfg(windows)] blocks in the code to gate
 # the Windows-specific calls; `winreg` is the registry API for

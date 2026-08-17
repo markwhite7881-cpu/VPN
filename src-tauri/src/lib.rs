@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use tauri::Manager;
+#[cfg(desktop)]
 use tauri_plugin_autostart::MacosLauncher;
 
 pub mod app_update;
@@ -26,6 +27,16 @@ pub mod updates;
 
 use process::ProcessManager;
 
+#[cfg(target_os = "android")]
+fn vpn_mobile_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("vpn")
+        .setup(|_app, api| {
+            api.register_android_plugin("ru.classquiz.singbox.vpn", "VpnPlugin")?;
+            Ok(())
+        })
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Best-effort logger init. RUST_LOG=info turns it on by default.
@@ -36,7 +47,8 @@ pub fn run() {
 
     let manager = Arc::new(ProcessManager::new());
 
-    tauri::Builder::default()
+    #[cfg(desktop)]
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -45,7 +57,12 @@ pub fn run() {
             // Forward the `--minimized` flag (no-op on Windows/Linux)
             // so the user can opt into starting in the background.
             Some(vec!["--minimized"]),
-        ))
+        ));
+
+    #[cfg(target_os = "android")]
+    let builder = tauri::Builder::default().plugin(vpn_mobile_plugin());
+
+    builder
         .manage(manager)
         .setup(|app| {
             // We're now inside Tauri's tokio runtime, safe to spawn.

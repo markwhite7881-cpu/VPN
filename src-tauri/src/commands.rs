@@ -545,6 +545,7 @@ pub async fn clear_system_proxy() -> AppResult<()> {
 // poke the plugin directly so the surface stays symmetrical with the
 // other commands and we can swap backends later (e.g. Task Scheduler).
 
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn get_autostart(app: AppHandle) -> AppResult<bool> {
     use tauri_plugin_autostart::ManagerExt;
@@ -553,6 +554,13 @@ pub async fn get_autostart(app: AppHandle) -> AppResult<bool> {
         .map_err(|e| AppError::Clash(format!("autostart probe failed: {e}")))
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn get_autostart(_app: AppHandle) -> AppResult<bool> {
+    Err(AppError::Unsupported("autostart".to_string()))
+}
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<bool> {
     use tauri_plugin_autostart::ManagerExt;
@@ -566,6 +574,12 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> AppResult<bool> {
     }
     mgr.is_enabled()
         .map_err(|e| AppError::Clash(format!("autostart recheck failed: {e}")))
+}
+
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn set_autostart(_app: AppHandle, _enabled: bool) -> AppResult<bool> {
+    Err(AppError::Unsupported("autostart".to_string()))
 }
 
 // --- Subscriptions -----------------------------------------------------
