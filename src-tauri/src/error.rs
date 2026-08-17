@@ -108,16 +108,38 @@ impl Serialize for AppError {
             AppError::Clash(_) => ("clash", self.to_string()),
             AppError::Network(_) => ("network", self.to_string()),
             AppError::Unsupported(_) => ("unsupported", self.to_string()),
-            AppError::Subscription(_) => ("subscription", self.to_string()),
-            AppError::SubscriptionAuth(_) => ("subscription_auth", self.to_string()),
-            AppError::SubscriptionExpired(_) => ("subscription_expired", self.to_string()),
-            AppError::DeviceLimit(_) => ("device_limit", self.to_string()),
-            AppError::PayloadTooLarge => ("payload_too_large", self.to_string()),
-            AppError::UnsafeRedirect(_) => ("unsafe_redirect", self.to_string()),
-            AppError::AmbiguousConfig(_) => ("ambiguous_config", self.to_string()),
-            AppError::Validation(_) => ("validation", self.to_string()),
-            AppError::EngineUnavailable(_) => ("engine_unavailable", self.to_string()),
-            AppError::UnsafeConfig(_) => ("unsafe_config", self.to_string()),
+            AppError::Subscription(_) => ("subscription", "Subscription operation failed".into()),
+            AppError::SubscriptionAuth(_) => (
+                "subscription_auth",
+                "Subscription authentication failed".into(),
+            ),
+            AppError::SubscriptionExpired(_) => {
+                ("subscription_expired", "Subscription has expired".into())
+            }
+            AppError::DeviceLimit(_) => {
+                ("device_limit", "Subscription device limit reached".into())
+            }
+            AppError::PayloadTooLarge => (
+                "payload_too_large",
+                "Subscription payload is too large".into(),
+            ),
+            AppError::UnsafeRedirect(_) => (
+                "unsafe_redirect",
+                "Subscription redirect was blocked".into(),
+            ),
+            AppError::AmbiguousConfig(_) => (
+                "ambiguous_config",
+                "Subscription configuration is ambiguous".into(),
+            ),
+            AppError::Validation(_) => ("validation", "Subscription validation failed".into()),
+            AppError::EngineUnavailable(_) => (
+                "engine_unavailable",
+                "Required subscription engine is unavailable".into(),
+            ),
+            AppError::UnsafeConfig(_) => (
+                "unsafe_config",
+                "Subscription configuration was blocked".into(),
+            ),
             AppError::Tauri(_) => ("tauri", self.to_string()),
         };
         let mut st = s.serialize_struct("AppError", 2)?;
@@ -146,39 +168,70 @@ mod tests {
     }
 
     #[test]
-    fn serializes_subscription_error_kinds_exactly() {
+    fn serializes_subscription_error_kinds_with_safe_messages() {
+        let secret = "SECRET_TOKEN https://user:pass@secret.example.test/sub body={credentials}";
         let cases = [
-            (AppError::Subscription("failed".into()), "subscription"),
             (
-                AppError::SubscriptionAuth("denied".into()),
+                AppError::Subscription(secret.into()),
+                "subscription",
+                "Subscription operation failed",
+            ),
+            (
+                AppError::SubscriptionAuth(secret.into()),
                 "subscription_auth",
+                "Subscription authentication failed",
             ),
             (
-                AppError::SubscriptionExpired("expired".into()),
+                AppError::SubscriptionExpired(secret.into()),
                 "subscription_expired",
+                "Subscription has expired",
             ),
-            (AppError::DeviceLimit("limit".into()), "device_limit"),
-            (AppError::PayloadTooLarge, "payload_too_large"),
             (
-                AppError::UnsafeRedirect("redirect".into()),
+                AppError::DeviceLimit(secret.into()),
+                "device_limit",
+                "Subscription device limit reached",
+            ),
+            (
+                AppError::PayloadTooLarge,
+                "payload_too_large",
+                "Subscription payload is too large",
+            ),
+            (
+                AppError::UnsafeRedirect(secret.into()),
                 "unsafe_redirect",
+                "Subscription redirect was blocked",
             ),
             (
-                AppError::AmbiguousConfig("ambiguous".into()),
+                AppError::AmbiguousConfig(secret.into()),
                 "ambiguous_config",
+                "Subscription configuration is ambiguous",
             ),
-            (AppError::Validation("invalid".into()), "validation"),
             (
-                AppError::EngineUnavailable("missing".into()),
-                "engine_unavailable",
+                AppError::Validation(secret.into()),
+                "validation",
+                "Subscription validation failed",
             ),
-            (AppError::UnsafeConfig("unsafe".into()), "unsafe_config"),
+            (
+                AppError::EngineUnavailable(secret.into()),
+                "engine_unavailable",
+                "Required subscription engine is unavailable",
+            ),
+            (
+                AppError::UnsafeConfig(secret.into()),
+                "unsafe_config",
+                "Subscription configuration was blocked",
+            ),
         ];
 
-        for (error, expected_kind) in cases {
+        for (error, expected_kind, expected_message) in cases {
             let value = serde_json::to_value(error).unwrap();
+            let serialized = value.to_string();
             assert_eq!(value["kind"], expected_kind);
-            assert!(value["message"].is_string());
+            assert_eq!(value["message"], expected_message);
+            assert!(!serialized.contains("SECRET_TOKEN"));
+            assert!(!serialized.contains("secret.example.test"));
+            assert!(!serialized.contains("user:pass"));
+            assert!(!serialized.contains("credentials"));
         }
     }
 }

@@ -25,6 +25,27 @@ impl SubscriptionStore {
     }
 
     pub fn replace_all(&self, records: &[SubscriptionRecord]) -> AppResult<()> {
+        self.replace_all_with(records, |temporary_path, target_path| {
+            fs::rename(temporary_path, target_path)
+        })
+    }
+
+    #[cfg(test)]
+    fn replace_all_with_replace<F>(
+        &self,
+        records: &[SubscriptionRecord],
+        replace: F,
+    ) -> AppResult<()>
+    where
+        F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+    {
+        self.replace_all_with(records, replace)
+    }
+
+    fn replace_all_with<F>(&self, records: &[SubscriptionRecord], replace: F) -> AppResult<()>
+    where
+        F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+    {
         ensure_parent(&self.path)?;
         let temporary_path = temporary_path(&self.path)?;
         let result = (|| -> AppResult<()> {
@@ -38,7 +59,7 @@ impl SubscriptionStore {
             file.flush()?;
             file.sync_all()?;
             drop(file);
-            fs::rename(&temporary_path, &self.path)?;
+            replace(&temporary_path, &self.path)?;
             Ok(())
         })();
 
@@ -68,6 +89,8 @@ fn temporary_path(path: &Path) -> AppResult<PathBuf> {
 mod tests {
     use super::SubscriptionStore;
     use crate::subscriptions::model::{ProviderMetadata, SubscriptionKind, SubscriptionRecord};
+    use std::fs;
+    use std::io::{self, ErrorKind};
 
     fn sample_record(name: &str) -> SubscriptionRecord {
         SubscriptionRecord {
@@ -91,6 +114,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = SubscriptionStore::new(dir.path().join("subscriptions.json"));
         assert!(store.load_all().unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_replace_preserves_previous_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subscriptions.json");
+        let store = SubscriptionStore::new(path.clone());
+        store.replace_all(&[sample_record("First")]).unwrap();
+        let previous_bytes = fs::read(&path).unwrap();
+
+        let result = store.replace_all_with_replace(&[sample_record("Replacement")], |_, _| {
+            Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                "forced replacement failure",
+            ))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), previous_bytes);
+        assert_eq!(store.load_all().unwrap()[0].name, "First");
     }
 
     #[test]

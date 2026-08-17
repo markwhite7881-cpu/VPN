@@ -34,7 +34,26 @@ impl HwidStore {
         Ok(uuid)
     }
 
+    #[cfg(test)]
+    fn reset_with_replace<F>(&self, replace: F) -> AppResult<Uuid>
+    where
+        F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+    {
+        let uuid = Uuid::new_v4();
+        self.write_atomic_with(uuid, replace)?;
+        Ok(uuid)
+    }
+
     fn write_atomic(&self, uuid: Uuid) -> AppResult<()> {
+        self.write_atomic_with(uuid, |temporary_path, target_path| {
+            fs::rename(temporary_path, target_path)
+        })
+    }
+
+    fn write_atomic_with<F>(&self, uuid: Uuid, replace: F) -> AppResult<()>
+    where
+        F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+    {
         ensure_parent(&self.path)?;
         let temporary_path = temporary_path(&self.path)?;
         let result = (|| -> AppResult<()> {
@@ -46,7 +65,7 @@ impl HwidStore {
             file.flush()?;
             file.sync_all()?;
             drop(file);
-            fs::rename(&temporary_path, &self.path)?;
+            replace(&temporary_path, &self.path)?;
             Ok(())
         })();
 
@@ -87,6 +106,7 @@ fn temporary_path(path: &Path) -> AppResult<PathBuf> {
 mod tests {
     use super::HwidStore;
     use std::fs;
+    use std::io::{self, ErrorKind};
     use uuid::Uuid;
 
     #[test]
@@ -102,6 +122,26 @@ mod tests {
         assert_ne!(first, third);
         assert_eq!(third.get_version_num(), 4);
         assert_eq!(fs::read_to_string(path).unwrap(), third.to_string());
+    }
+
+    #[test]
+    fn failed_reset_preserves_previous_hwid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device-id");
+        let store = HwidStore::new(path.clone());
+        let previous = store.get_or_create().unwrap();
+        let previous_bytes = fs::read(&path).unwrap();
+
+        let result = store.reset_with_replace(|_, _| {
+            Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                "forced replacement failure",
+            ))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), previous_bytes);
+        assert_eq!(store.get_or_create().unwrap(), previous);
     }
 
     #[test]

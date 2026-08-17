@@ -35,6 +35,23 @@ pub enum SubscriptionErrorKind {
     UnsafeConfig,
 }
 
+impl SubscriptionErrorKind {
+    pub const fn safe_message(self) -> &'static str {
+        match self {
+            Self::Subscription => "Subscription operation failed",
+            Self::SubscriptionAuth => "Subscription authentication failed",
+            Self::SubscriptionExpired => "Subscription has expired",
+            Self::DeviceLimit => "Subscription device limit reached",
+            Self::PayloadTooLarge => "Subscription payload is too large",
+            Self::UnsafeRedirect => "Subscription redirect was blocked",
+            Self::AmbiguousConfig => "Subscription configuration is ambiguous",
+            Self::Validation => "Subscription validation failed",
+            Self::EngineUnavailable => "Required subscription engine is unavailable",
+            Self::UnsafeConfig => "Subscription configuration was blocked",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubscriptionRecord {
     pub id: String,
@@ -76,7 +93,7 @@ impl SubscriptionRecord {
             metadata: self.metadata.clone(),
             last_success_at: self.last_success_at,
             last_http_status: self.last_http_status,
-            last_error: self.last_error.clone(),
+            last_error: self.last_error.as_ref().map(SubscriptionFailure::to_safe),
         }
     }
 }
@@ -117,6 +134,15 @@ pub struct SubscriptionFailure {
     pub message: String,
 }
 
+impl SubscriptionFailure {
+    fn to_safe(&self) -> Self {
+        Self {
+            kind: self.kind,
+            message: self.kind.safe_message().into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SubscriptionSummary {
     pub id: String,
@@ -142,7 +168,8 @@ pub struct ChildProfileSummary {
 #[cfg(test)]
 mod tests {
     use super::{
-        ChildProfileRecord, EngineKind, ProviderMetadata, SubscriptionKind, SubscriptionRecord,
+        ChildProfileRecord, EngineKind, ProviderMetadata, SubscriptionErrorKind,
+        SubscriptionFailure, SubscriptionKind, SubscriptionRecord,
     };
     use serde_json::{json, Value};
 
@@ -164,7 +191,11 @@ mod tests {
             metadata: ProviderMetadata::default(),
             last_success_at: None,
             last_http_status: Some(200),
-            last_error: None,
+            last_error: Some(SubscriptionFailure {
+                kind: SubscriptionErrorKind::SubscriptionAuth,
+                message: "SECRET_TOKEN provider body https://user:pass@secret.example.test/sub"
+                    .into(),
+            }),
         }
     }
 
@@ -187,8 +218,15 @@ mod tests {
         assert!(value.get("url").is_none());
         assert!(value.get("bundle").is_none());
         assert!(!contains_key(&value, "config"));
-        assert!(!value.to_string().contains("secret.example.test"));
-        assert!(!value.to_string().contains("token@example.test"));
+        let serialized = value.to_string();
+        assert!(!serialized.contains("secret.example.test"));
+        assert!(!serialized.contains("token@example.test"));
+        assert!(!serialized.contains("SECRET_TOKEN"));
+        assert!(!serialized.contains("user:pass"));
+        assert_eq!(
+            value["last_error"]["message"],
+            "Subscription authentication failed"
+        );
     }
 
     fn contains_key(value: &Value, key: &str) -> bool {
