@@ -22,6 +22,7 @@ pub mod config;
 pub mod error;
 pub mod parser;
 pub mod process;
+pub mod subscriptions;
 pub mod traffic;
 pub mod updates;
 

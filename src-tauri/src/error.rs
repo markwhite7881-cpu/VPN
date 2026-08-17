@@ -54,6 +54,36 @@ pub enum AppError {
     #[error("unsupported: {0}")]
     Unsupported(String),
 
+    #[error("subscription error: {0}")]
+    Subscription(String),
+
+    #[error("subscription authentication failed: {0}")]
+    SubscriptionAuth(String),
+
+    #[error("subscription expired: {0}")]
+    SubscriptionExpired(String),
+
+    #[error("subscription device limit reached: {0}")]
+    DeviceLimit(String),
+
+    #[error("subscription payload is too large")]
+    PayloadTooLarge,
+
+    #[error("unsafe subscription redirect: {0}")]
+    UnsafeRedirect(String),
+
+    #[error("ambiguous subscription config: {0}")]
+    AmbiguousConfig(String),
+
+    #[error("validation failed: {0}")]
+    Validation(String),
+
+    #[error("engine unavailable: {0}")]
+    EngineUnavailable(String),
+
+    #[error("unsafe config: {0}")]
+    UnsafeConfig(String),
+
     #[error("tauri error: {0}")]
     Tauri(#[from] tauri::Error),
 }
@@ -78,6 +108,16 @@ impl Serialize for AppError {
             AppError::Clash(_) => ("clash", self.to_string()),
             AppError::Network(_) => ("network", self.to_string()),
             AppError::Unsupported(_) => ("unsupported", self.to_string()),
+            AppError::Subscription(_) => ("subscription", self.to_string()),
+            AppError::SubscriptionAuth(_) => ("subscription_auth", self.to_string()),
+            AppError::SubscriptionExpired(_) => ("subscription_expired", self.to_string()),
+            AppError::DeviceLimit(_) => ("device_limit", self.to_string()),
+            AppError::PayloadTooLarge => ("payload_too_large", self.to_string()),
+            AppError::UnsafeRedirect(_) => ("unsafe_redirect", self.to_string()),
+            AppError::AmbiguousConfig(_) => ("ambiguous_config", self.to_string()),
+            AppError::Validation(_) => ("validation", self.to_string()),
+            AppError::EngineUnavailable(_) => ("engine_unavailable", self.to_string()),
+            AppError::UnsafeConfig(_) => ("unsafe_config", self.to_string()),
             AppError::Tauri(_) => ("tauri", self.to_string()),
         };
         let mut st = s.serialize_struct("AppError", 2)?;
@@ -103,5 +143,42 @@ mod tests {
                 "message": "unsupported: autostart",
             })
         );
+    }
+
+    #[test]
+    fn serializes_subscription_error_kinds_exactly() {
+        let cases = [
+            (AppError::Subscription("failed".into()), "subscription"),
+            (
+                AppError::SubscriptionAuth("denied".into()),
+                "subscription_auth",
+            ),
+            (
+                AppError::SubscriptionExpired("expired".into()),
+                "subscription_expired",
+            ),
+            (AppError::DeviceLimit("limit".into()), "device_limit"),
+            (AppError::PayloadTooLarge, "payload_too_large"),
+            (
+                AppError::UnsafeRedirect("redirect".into()),
+                "unsafe_redirect",
+            ),
+            (
+                AppError::AmbiguousConfig("ambiguous".into()),
+                "ambiguous_config",
+            ),
+            (AppError::Validation("invalid".into()), "validation"),
+            (
+                AppError::EngineUnavailable("missing".into()),
+                "engine_unavailable",
+            ),
+            (AppError::UnsafeConfig("unsafe".into()), "unsafe_config"),
+        ];
+
+        for (error, expected_kind) in cases {
+            let value = serde_json::to_value(error).unwrap();
+            assert_eq!(value["kind"], expected_kind);
+            assert!(value["message"].is_string());
+        }
     }
 }
