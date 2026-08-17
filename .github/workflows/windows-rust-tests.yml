@@ -12,7 +12,8 @@ permissions:
 jobs:
   test:
     name: Windows Rust library tests
-    runs-on: windows-latest
+    # CI diagnostic: isolate the native loader boundary from the Windows Server 2025 image.
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.2
