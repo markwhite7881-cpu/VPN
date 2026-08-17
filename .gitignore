@@ -53,6 +53,7 @@ latest.json
 
 # Temporary / test scratch space
 .tmp*/
+release-staging/local-scratch/
 *.TRASH
 *.bak
 *portable.exe
