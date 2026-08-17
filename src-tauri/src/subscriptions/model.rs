@@ -119,6 +119,16 @@ impl ChildProfileRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ProviderMetadata {
     #[serde(default)]
+    pub profile_title: Option<String>,
+    #[serde(default)]
+    pub update_interval_hours: Option<u32>,
+    #[serde(default)]
+    pub profile_web_page_url: Option<String>,
+    #[serde(default)]
+    pub support_url: Option<String>,
+    #[serde(default)]
+    pub userinfo: Option<SubscriptionUserinfo>,
+    #[serde(default)]
     pub upload_bytes: Option<u64>,
     #[serde(default)]
     pub download_bytes: Option<u64>,
@@ -126,6 +136,18 @@ pub struct ProviderMetadata {
     pub total_bytes: Option<u64>,
     #[serde(default)]
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SubscriptionUserinfo {
+    #[serde(default)]
+    pub upload: Option<u64>,
+    #[serde(default)]
+    pub download: Option<u64>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(default)]
+    pub expire: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
