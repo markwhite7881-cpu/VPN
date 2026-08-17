@@ -1,9 +1,6 @@
-use std::collections::HashMap;
-
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use serde_json::Value;
-use uuid::Uuid;
 
 use crate::commands::{ParseFailure, ParseLinksResult};
 use crate::error::{AppError, AppResult};
@@ -96,10 +93,16 @@ fn classify_links(bytes: &[u8]) -> AppResult<ClassifiedPayload> {
     let lines = split_link_lines(text)?;
     let mut outbounds = Vec::new();
     let mut failures = Vec::new();
-    for line in lines {
+    for (index, line) in lines.into_iter().enumerate() {
         match parser::parse_link(&line) {
             Ok(outbound) => outbounds.push(outbound),
-            Err(error) => failures.push(ParseFailure { line, error }),
+            Err(_) => failures.push(ParseFailure {
+                line: format!("item-{index}"),
+                error: parser::ParseError::InvalidValue(
+                    "subscription item".into(),
+                    "invalid".into(),
+                ),
+            }),
         }
     }
     if outbounds.is_empty() {
@@ -191,38 +194,23 @@ fn pointer_exists(value: &Value, pointer: &str) -> bool {
 }
 
 fn classified_children(values: Vec<Value>) -> Vec<ClassifiedChild> {
-    let mut duplicate_counts: HashMap<String, usize> = HashMap::new();
     values
         .into_iter()
         .enumerate()
         .map(|(index, config)| {
-            let identity = child_identity(&config).unwrap_or_else(|| format!("index-{index}"));
-            let duplicate_ordinal = duplicate_counts.entry(identity).or_default();
-            let key = stable_child_key(&config, index, *duplicate_ordinal);
-            *duplicate_ordinal += 1;
+            let key = stable_child_key(&config, index, 0);
             let name = child_name(&config).unwrap_or_else(|| format!("Profile {}", index + 1));
             ClassifiedChild { key, name, config }
         })
         .collect()
 }
 
-pub fn stable_child_key(value: &Value, index: usize, duplicate_ordinal: usize) -> String {
-    let Some(identity) = child_identity(value) else {
-        return format!("index-{index}");
-    };
+pub fn stable_child_key(_value: &Value, index: usize, duplicate_ordinal: usize) -> String {
     if duplicate_ordinal == 0 {
-        identity
+        format!("index-{index}")
     } else {
-        format!("{identity}-{duplicate_ordinal}")
+        format!("index-{index}-{duplicate_ordinal}")
     }
-}
-
-fn child_identity(value: &Value) -> Option<String> {
-    child_name(value)
-        .as_deref()
-        .and_then(safe_public_label)
-        .and_then(normalize_key)
-        .map(|name| format!("name-{name}"))
 }
 
 fn child_name(value: &Value) -> Option<String> {
@@ -235,63 +223,6 @@ fn child_name(value: &Value) -> Option<String> {
 
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn safe_public_label(value: &str) -> Option<&str> {
-    let value = value.trim();
-    let lower = value.to_ascii_lowercase();
-    let sensitive_word = [
-        "token",
-        "secret",
-        "password",
-        "passwd",
-        "credential",
-        "bearer",
-        "api-key",
-        "apikey",
-        "access-key",
-        "access_key",
-    ]
-    .iter()
-    .any(|word| lower.contains(word));
-    let sensitive_delimiter = value
-        .chars()
-        .any(|character| matches!(character, '/' | '\\' | ':' | '@' | '=' | '?' | '#' | '&'));
-    let suspicious_compact_length = !value.chars().any(char::is_whitespace) && value.len() > 32;
-
-    if value.is_empty()
-        || value.len() > 64
-        || Uuid::parse_str(value).is_ok()
-        || sensitive_word
-        || sensitive_delimiter
-        || suspicious_compact_length
-    {
-        return None;
-    }
-    Some(value)
-}
-
-fn normalize_key(value: &str) -> Option<String> {
-    let mut normalized = String::new();
-    let mut pending_separator = false;
-    for character in value.trim().chars().flat_map(char::to_lowercase) {
-        if character.is_alphanumeric() {
-            if pending_separator && !normalized.is_empty() {
-                normalized.push('-');
-            }
-            normalized.push(character);
-            pending_separator = false;
-        } else {
-            pending_separator = true;
-        }
-        if normalized.len() >= 64 {
-            break;
-        }
-    }
-    while normalized.ends_with('-') {
-        normalized.pop();
-    }
-    (!normalized.is_empty()).then_some(normalized)
 }
 
 #[cfg(test)]
@@ -391,38 +322,26 @@ mod tests {
     }
 
     #[test]
-    fn stable_key_ignores_generic_provider_ids_and_keeps_safe_public_label() {
-        let first = json!({
-            "id": "subscription-token-abc123",
-            "profile_id": "credential-secret-one",
-            "remarks": "Primary Node",
-            "outbounds": [{"type": "vless", "uuid": "secret-one"}]
-        });
-        let rotated = json!({
-            "id": "subscription-token-def456",
-            "profile_id": "credential-secret-two",
-            "remarks": "Primary Node",
-            "outbounds": [{"type": "vless", "uuid": "secret-two"}]
-        });
-        assert_eq!(stable_child_key(&first, 0, 0), "name-primary-node");
-        assert_eq!(
-            stable_child_key(&first, 0, 0),
-            stable_child_key(&rotated, 0, 0)
-        );
-    }
-
-    #[test]
-    fn stable_key_rejects_secret_like_public_labels() {
-        let cases = [
+    fn stable_key_never_uses_provider_controlled_identity_fields() {
+        let labels = [
+            "192.0.2.10",
+            "node.provider.example",
+            "dG9rZW4tY3JlZGVudGlhbC0xMjM0NTY",
             "11111111-1111-4111-8111-111111111111",
             "https://user:password@example.test/sub",
-            "access-token-abc123",
-            "user@example.test",
-            "name=value",
+            "user:password@192.0.2.1:1080",
+            "Primary Node",
         ];
-        for label in cases {
-            let value = json!({"remarks": label});
-            assert_eq!(stable_child_key(&value, 3, 0), "index-3");
+        for label in labels {
+            let value = json!({
+                "id": label,
+                "profile_id": label,
+                "remarks": label,
+                "name": label
+            });
+            let key = stable_child_key(&value, 3, 0);
+            assert_eq!(key, "index-3");
+            assert!(!key.contains(label));
         }
     }
 
@@ -453,10 +372,45 @@ mod tests {
     }
 
     #[test]
-    fn stable_key_uses_normalized_name_and_duplicate_ordinal() {
-        let value = json!({"remarks": "  Primary   Node  "});
-        assert_eq!(stable_child_key(&value, 4, 0), "name-primary-node");
-        assert_eq!(stable_child_key(&value, 4, 2), "name-primary-node-2");
+    fn classified_failures_serialize_and_debug_without_raw_link_material() {
+        let uuid = "22222222-2222-4222-8222-222222222222";
+        let failed_url = format!(
+            "socks://synthetic-user:synthetic-pass@192.0.2.1:1080/{uuid}?marker=raw-marker"
+        );
+        let payload = format!("{LINK}\n{failed_url}\nopaque-secret-raw-marker");
+        let ClassifiedPayload::LinkList(result) =
+            classify_payload(payload.as_bytes(), Some("text/plain")).unwrap()
+        else {
+            panic!("expected link list");
+        };
+
+        assert_eq!(result.outbounds.len(), 1);
+        assert_eq!(result.failures.len(), 2);
+        assert_eq!(result.failures[0].line, "item-1");
+        assert_eq!(result.failures[1].line, "item-2");
+
+        let serialized = serde_json::to_string(&result.failures).unwrap();
+        let debugged = format!("{:?}", result.failures);
+        for exposed in [
+            "socks",
+            "synthetic-user",
+            "synthetic-pass",
+            "192.0.2.1",
+            uuid,
+            "raw-marker",
+            "opaque-secret",
+            &failed_url,
+        ] {
+            assert!(!serialized.contains(exposed));
+            assert!(!debugged.contains(exposed));
+        }
+    }
+
+    #[test]
+    fn stable_key_uses_position_and_duplicate_ordinal() {
+        let value = json!({"remarks": "Primary Node"});
+        assert_eq!(stable_child_key(&value, 4, 0), "index-4");
+        assert_eq!(stable_child_key(&value, 4, 2), "index-4-2");
     }
 
     #[test]
