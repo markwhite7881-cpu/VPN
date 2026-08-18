@@ -118,8 +118,11 @@ pub async fn check_config(app: AppHandle, config_path: String) -> AppResult<Stri
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManagedLaunchInput {
+    #[serde(alias = "manualOutbounds")]
     pub manual_outbounds: Vec<Outbound>,
+    #[serde(alias = "subscriptionLinks")]
     pub subscription_links: Option<Vec<crate::subscriptions::SubscriptionLinkRef>>,
+    #[serde(alias = "selectAllSubscriptionLinks")]
     pub select_all_subscription_links: bool,
     pub settings: GeneratorSettings,
     #[serde(default)]
@@ -172,7 +175,7 @@ async fn start_ready_profile_inner(
         .resolve_child_profile(&input.subscription_id, &input.child_key)
         .await?;
 
-    let (value, proxy, binary, routing) = match profile.engine {
+    let (value, proxy, binary, env, routing, xray_stats) = match profile.engine {
         EngineKind::Xray => {
             let prepared = crate::xray::prepare_xray_runtime_config(
                 profile.config,
@@ -180,8 +183,16 @@ async fn start_ready_profile_inner(
                 allocate_loopback_port,
             )?;
             let binary = xray::locate_binary(&app)?;
+            let geodata = xray::geodata::ensure(&app).await?;
             let proxy = (prepared.proxy_host.clone(), prepared.proxy_port);
-            (prepared.value, Some(proxy), binary, prepared.applicability)
+            (
+                prepared.value,
+                Some(proxy),
+                binary,
+                vec![geodata.env_pair()],
+                prepared.applicability,
+                Some(prepared.stats),
+            )
         }
         EngineKind::Singbox => {
             return start_resolved_singbox_profile(app, pm, profile).await;
@@ -189,7 +200,7 @@ async fn start_ready_profile_inner(
     };
 
     let path = write_runtime_config(&app, &value)?;
-    if let Err(error) = xray::validate_config(&binary, &path).await {
+    if let Err(error) = xray::validate_config(&binary, &path, &env).await {
         let _ = crate::process::clear_system_proxy();
         pm.reset().await;
         return Err(error);
@@ -208,10 +219,12 @@ async fn start_ready_profile_inner(
                 engine: EngineKind::Xray,
                 binary,
                 args: xray::run_args(&path).to_vec(),
+                env,
                 config_path: path,
                 controller_url: None,
                 profile_key: Some(profile.key),
                 profile_name: Some(profile.name),
+                xray_stats,
             },
         )
         .await
@@ -253,10 +266,12 @@ async fn start_resolved_singbox_profile(
                 engine: EngineKind::Singbox,
                 binary: singbox::locate_binary(&app)?,
                 args: singbox::run_args(&path).to_vec(),
+                env: Vec::new(),
                 config_path: path,
                 controller_url: None,
                 profile_key: Some(profile.key),
                 profile_name: Some(profile.name),
+                xray_stats: None,
             },
         )
         .await?;
@@ -366,10 +381,12 @@ pub async fn start_managed_singbox(
                     engine: profile.engine,
                     binary,
                     args,
+                    env: Vec::new(),
                     config_path: path.clone(),
                     controller_url,
                     profile_key: Some(profile.key),
                     profile_name: Some(profile.name),
+                    xray_stats: None,
                 },
             )
             .await?;
@@ -446,10 +463,12 @@ pub async fn start_connection(
             OsString::from("-c"),
             config_path.as_os_str().to_os_string(),
         ],
+        env: Vec::new(),
         config_path,
         controller_url,
         profile_key: None,
         profile_name: None,
+        xray_stats: None,
     };
     pm.start_spec_with_app(Some(&app), spec).await
 }
@@ -1160,8 +1179,24 @@ pub async fn apply_singbox_update(
 
 #[cfg(test)]
 mod managed_launch_tests {
-    use super::deduplicate_outbounds;
-    use crate::parser::Outbound;
+    use super::{deduplicate_outbounds, ManagedLaunchInput};
+    use crate::{config::GeneratorSettings, parser::Outbound};
+    use serde_json::json;
+
+    #[test]
+    fn managed_launch_input_accepts_webview_camel_case_fields() {
+        let input: ManagedLaunchInput = serde_json::from_value(json!({
+            "manualOutbounds": [],
+            "subscriptionLinks": [],
+            "selectAllSubscriptionLinks": false,
+            "settings": GeneratorSettings::default(),
+        }))
+        .expect("WebView managed-launch payload deserializes");
+
+        assert!(input.manual_outbounds.is_empty());
+        assert_eq!(input.subscription_links, Some(Vec::new()));
+        assert!(!input.select_all_subscription_links);
+    }
 
     #[test]
     fn deduplicates_manual_and_subscription_outbounds_in_first_seen_order() {

@@ -29,6 +29,7 @@ use tokio::task::JoinHandle;
 use crate::engine::{EngineKind, LaunchSpec};
 use crate::error::{AppError, AppResult};
 use crate::traffic::TrafficStream;
+use crate::xray::stats::{XrayStatsSpec, XrayStatsStream};
 
 const LOG_BUFFER_CAPACITY: usize = 2000;
 const DEFAULT_TERMINATE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -93,6 +94,15 @@ struct ChildSlot {
     child: Child,
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct XrayTestState {
+    run_id: Option<u64>,
+    starts: usize,
+    emits: usize,
+    events: Vec<&'static str>,
+}
+
 /// Centralised state shared across Tauri commands.
 pub struct ProcessManager {
     /// Currently running child process, if any.
@@ -111,12 +121,19 @@ pub struct ProcessManager {
     next_run_id: AtomicU64,
     /// ID currently allowed to mutate runtime state; zero means no active run.
     active_run_id: AtomicU64,
+    /// Run generation currently owning Xray telemetry, or zero when idle.
+    xray_stats_run_id: AtomicU64,
     /// Serializes every public API, traffic, and lifecycle transition. Owned
     /// semaphore permits may cross I/O awaits without holding a mutex guard.
     transition: Arc<Semaphore>,
     /// Live traffic WebSocket reader. Started automatically when
     /// `controller_url` is set, stopped when the process exits.
     traffic: Arc<TrafficStream>,
+    /// Private Xray StatsService owner; never exposed through command results.
+    xray_stats: Arc<XrayStatsStream>,
+    /// Test-only observable ownership seam for lifecycle assertions.
+    #[cfg(test)]
+    xray_test_state: Mutex<XrayTestState>,
     /// Test-only ownership of spawned stdout/stderr tasks, so tests can await
     /// EOF without relying on lifecycle watcher timing.
     #[cfg(test)]
@@ -134,8 +151,12 @@ impl Default for ProcessManager {
             controller_url: Mutex::new(None),
             next_run_id: AtomicU64::new(0),
             active_run_id: AtomicU64::new(0),
+            xray_stats_run_id: AtomicU64::new(0),
             transition: Arc::new(Semaphore::new(1)),
             traffic: Arc::new(TrafficStream::new()),
+            xray_stats: Arc::new(XrayStatsStream::new()),
+            #[cfg(test)]
+            xray_test_state: Mutex::new(XrayTestState::default()),
             #[cfg(test)]
             stdio_readers: Mutex::new(Vec::new()),
         }
@@ -245,6 +266,7 @@ impl ProcessManager {
         }
         let mut cmd = Command::new(&spec.binary);
         cmd.args(&spec.args)
+            .envs(spec.env.iter().map(|(key, value)| (key, value)))
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdin(std::process::Stdio::null())
@@ -327,6 +349,12 @@ impl ProcessManager {
         status.profile_name = spec.profile_name;
         let report = status.clone();
         drop(status);
+        if spec.engine == EngineKind::Xray {
+            if let Some(stats_spec) = spec.xray_stats {
+                self.start_xray_telemetry(run_id, app.cloned(), stats_spec)
+                    .await;
+            }
+        }
         if spec.engine == EngineKind::Singbox {
             if let (Some(controller_url), Some(app)) = (spec.controller_url, app.cloned()) {
                 if self.is_active_singbox_run(run_id).await {
@@ -362,10 +390,12 @@ impl ProcessManager {
                     OsString::from("-c"),
                     config_path.as_os_str().to_os_string(),
                 ],
+                env: Vec::new(),
                 config_path: config_path.to_path_buf(),
                 controller_url,
                 profile_key: None,
                 profile_name: None,
+                xray_stats: None,
             },
         )
         .await
@@ -390,6 +420,10 @@ impl ProcessManager {
             _ => "stopping sing-box",
         };
         self.push_log(LogStream::System, label).await;
+
+        if engine == Some(EngineKind::Xray) {
+            self.stop_xray_telemetry().await;
+        }
 
         // The traffic stream belongs exclusively to sing-box's Clash controller.
         if engine == Some(EngineKind::Singbox) && self.is_active_run(run_id).await {
@@ -514,6 +548,83 @@ impl ProcessManager {
         }
     }
 
+    async fn start_xray_telemetry(&self, run_id: u64, app: Option<AppHandle>, spec: XrayStatsSpec) {
+        if !self.is_active_run(run_id).await {
+            return;
+        }
+        self.xray_stats.stop().await;
+        self.xray_stats_run_id.store(0, Ordering::Release);
+        if !self.is_active_run(run_id).await {
+            return;
+        }
+
+        #[cfg(test)]
+        if app.is_none() {
+            let mut state = self.xray_test_state.lock().await;
+            if self.active_run_id.load(Ordering::Acquire) == run_id {
+                state.run_id = Some(run_id);
+                state.starts += 1;
+                state.events.push("start");
+                self.xray_stats_run_id.store(run_id, Ordering::Release);
+            }
+            return;
+        }
+
+        if let Some(app) = app {
+            if let Err(error) = self.xray_stats.start(app, spec).await {
+                log::warn!("Xray traffic stream start failed: {error}");
+                return;
+            }
+            if self.is_active_run(run_id).await {
+                self.xray_stats_run_id.store(run_id, Ordering::Release);
+            } else {
+                self.xray_stats.stop().await;
+            }
+        }
+    }
+
+    async fn stop_xray_telemetry(&self) {
+        let owned_run = self.xray_stats_run_id.swap(0, Ordering::AcqRel);
+        self.xray_stats.stop().await;
+        #[cfg(test)]
+        if owned_run != 0 {
+            let mut state = self.xray_test_state.lock().await;
+            state.run_id = None;
+            state.events.push("stop");
+        }
+    }
+
+    #[cfg(test)]
+    async fn xray_telemetry_run_id(&self) -> Option<u64> {
+        let run_id = self.xray_stats_run_id.load(Ordering::Acquire);
+        (run_id != 0).then_some(run_id)
+    }
+
+    #[cfg(test)]
+    async fn test_xray_telemetry_start_count(&self) -> usize {
+        self.xray_test_state.lock().await.starts
+    }
+
+    #[cfg(test)]
+    async fn test_xray_telemetry_emit_count(&self) -> usize {
+        self.xray_test_state.lock().await.emits
+    }
+
+    #[cfg(test)]
+    async fn test_xray_telemetry_events(&self) -> Vec<&'static str> {
+        self.xray_test_state.lock().await.events.clone()
+    }
+
+    #[cfg(test)]
+    async fn test_emit_xray_sample(&self, run_id: u64) {
+        let mut state = self.xray_test_state.lock().await;
+        if self.xray_stats_run_id.load(Ordering::Acquire) == run_id
+            && self.active_run_id.load(Ordering::Acquire) == run_id
+        {
+            state.emits += 1;
+        }
+    }
+
     async fn reset_with_proxy_cleanup<F>(&self, clear_proxy: F)
     where
         F: FnOnce() -> AppResult<()>,
@@ -525,9 +636,12 @@ impl ProcessManager {
             )
             .await;
         }
+        self.stop_xray_telemetry().await;
         self.active_run_id.store(0, Ordering::Release);
         *self.child.lock().await = None;
         *self.status.lock().await = StatusReport::default();
+        #[cfg(test)]
+        self.xray_test_state.lock().await.events.push("state_clear");
         *self.started_at.lock().await = None;
         *self.current_config.lock().await = None;
         self.controller_url.lock().await.take();
@@ -560,6 +674,7 @@ impl ProcessManager {
 
         // Unexpected exits bypass `stop`; cancel the old run before another
         // launch can start a sing-box traffic task.
+        self.stop_xray_telemetry().await;
         self.traffic.stop().await;
         if self.active_run_id.load(Ordering::Acquire) != run_id {
             return;
@@ -602,6 +717,8 @@ impl ProcessManager {
                 }
             }
         };
+        #[cfg(test)]
+        self.xray_test_state.lock().await.events.push("state_clear");
         self.push_log(LogStream::System, line).await;
         if let Err(error) = clear_system_proxy() {
             self.push_log(
@@ -646,6 +763,7 @@ impl ProcessManager {
         if self.active_run_id.load(Ordering::Acquire) != run_id {
             return;
         }
+        self.stop_xray_telemetry().await;
         let mut status = self.status.lock().await;
         if self.active_run_id.load(Ordering::Acquire) == run_id {
             *status = StatusReport::default();
@@ -1425,10 +1543,12 @@ mod engine_runtime_tests {
                 OsString::from("-Command"),
                 OsString::from("Start-Sleep -Seconds 60"),
             ],
+            env: Vec::new(),
             config_path: PathBuf::from("xray-test-config.json"),
             controller_url: Some("http://controller.test".into()),
             profile_key: Some("test-xray".into()),
             profile_name: Some("Test Xray".into()),
+            xray_stats: None,
         }
     }
 
@@ -1622,6 +1742,75 @@ mod engine_runtime_tests {
         assert_eq!(status.engine, None);
         assert_eq!(status.profile_key, None);
         assert_eq!(status.profile_name, None);
+    }
+
+    #[tokio::test]
+    async fn xray_launch_starts_one_telemetry_owner() {
+        let pm = Arc::new(ProcessManager::new());
+        let status = pm.start_spec(test_xray_spec_with_stats()).await.unwrap();
+        let run_id = pm.active_run_id.load(Ordering::Acquire);
+
+        assert_eq!(status.status, Status::Running);
+        assert_eq!(pm.xray_telemetry_run_id().await, Some(run_id));
+        assert_eq!(pm.test_xray_telemetry_start_count().await, 1);
+        pm.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn stopping_xray_cancels_telemetry_before_process_state_is_cleared() {
+        let pm = Arc::new(ProcessManager::new());
+        pm.start_spec(test_xray_spec_with_stats()).await.unwrap();
+
+        pm.stop().await.unwrap();
+
+        assert_eq!(pm.xray_telemetry_run_id().await, None);
+        assert_eq!(pm.snapshot_status().await.status, Status::Stopped);
+        assert_eq!(
+            pm.test_xray_telemetry_events().await,
+            vec!["start", "stop", "state_clear"]
+        );
+    }
+
+    #[tokio::test]
+    async fn replacing_xray_with_singbox_cannot_emit_from_old_xray_run() {
+        let pm = Arc::new(ProcessManager::new());
+        pm.start_spec(test_xray_spec_with_stats()).await.unwrap();
+        let old_run_id = pm.active_run_id.load(Ordering::Acquire);
+        pm.stop().await.unwrap();
+
+        pm.start_spec(test_singbox_spec()).await.unwrap();
+        pm.test_emit_xray_sample(old_run_id).await;
+
+        assert_eq!(pm.test_xray_telemetry_emit_count().await, 0);
+        pm.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_xray_spawn_does_not_leave_telemetry_running() {
+        let pm = Arc::new(ProcessManager::new());
+        let mut spec = test_xray_spec_with_stats();
+        spec.binary = PathBuf::from("definitely-missing-xray-binary");
+
+        assert!(pm.start_spec(spec).await.is_err());
+        assert_eq!(pm.xray_telemetry_run_id().await, None);
+        assert_eq!(pm.test_xray_telemetry_start_count().await, 0);
+    }
+
+    fn test_xray_spec_with_stats() -> LaunchSpec {
+        let mut spec = test_xray_spec();
+        spec.xray_stats = Some(crate::xray::stats::XrayStatsSpec {
+            api_host: "127.0.0.1".into(),
+            api_port: 29001,
+            traffic_tag: "xray-test".into(),
+        });
+        spec
+    }
+
+    fn test_singbox_spec() -> LaunchSpec {
+        let mut spec = test_xray_spec();
+        spec.engine = EngineKind::Singbox;
+        spec.xray_stats = None;
+        spec
     }
 
     #[test]
