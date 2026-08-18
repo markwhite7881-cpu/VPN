@@ -33,6 +33,7 @@ import { useReadyProfileMetadata } from "@/hooks/useReadyProfileMetadata";
 import { isSupported } from "@/lib/outbound";
 import { basename } from "@/lib/utils";
 import { shouldFrontendApplySystemProxy } from "@/lib/systemProxy";
+import { nextReconnectRequired } from "@/lib/reconnectState";
 import type {
   BinaryInfo,
   CustomRule,
@@ -323,6 +324,16 @@ export default function App() {
   // Config-builder settings — lifted here so they survive tab
   // switches and a process restart (persisted to localStorage below).
   const [settings, setSettings] = useState<GeneratorSettings>(loadSettings);
+  const [reconnectRequired, setReconnectRequired] = useState(false);
+  const handleSettingsChange = useCallback(
+    (next: GeneratorSettings): void => {
+      setSettings(next);
+      setReconnectRequired((previous) =>
+        nextReconnectRequired(previous, status.status === "running"),
+      );
+    },
+    [status.status],
+  );
   // Index into `profiles` (manual + subscription) for the server the
   // user has selected on the Home tab. -1 = "auto" (let urltest pick).
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
@@ -892,8 +903,8 @@ export default function App() {
             status={status}
             profiles={manualProfiles}
             settings={settings}
-            onSettingsChange={setSettings}
-            onResetSettings={() => setSettings(DEFAULT_SETTINGS)}
+            onSettingsChange={handleSettingsChange}
+            onResetSettings={() => handleSettingsChange(DEFAULT_SETTINGS)}
             onPickConfig={onPickConfig}
             onUseDefault={onUseDefault}
             onConfigPath={(p) => {
@@ -914,7 +925,7 @@ export default function App() {
           <RoutingTab
             profiles={manualProfiles}
             settings={settings}
-            onSettingsChange={setSettings}
+            onSettingsChange={handleSettingsChange}
           />
         ),
       },
