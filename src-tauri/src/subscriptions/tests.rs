@@ -301,6 +301,105 @@ async fn legacy_fetch_rejects_full_configuration_bundle() {
 }
 
 #[tokio::test]
+async fn provider_title_replaces_generic_subscription_name() {
+    let response = http_response_with_headers(
+        "text/plain",
+        &[("Profile-Title", "Anivka")],
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    );
+    let (url, server) = spawn_sequence_server(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let added = service
+        .add(AddSubscriptionInput {
+            name: "Subscription".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(added.subscription.name, "Anivka");
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Anivka"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn custom_subscription_name_wins_over_provider_title() {
+    let response = http_response_with_headers(
+        "text/plain",
+        &[("Profile-Title", "Anivka")],
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    );
+    let (url, server) = spawn_sequence_server(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let added = service
+        .add(AddSubscriptionInput {
+            name: "My work subscription".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(added.subscription.name, "My work subscription");
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "My work subscription"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn blank_provider_title_keeps_generic_subscription_name() {
+    let response = http_response_with_headers(
+        "text/plain",
+        &[("Profile-Title", "   ")],
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    );
+    let (url, server) = spawn_sequence_server(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let added = service
+        .add(AddSubscriptionInput {
+            name: "Subscription".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(added.subscription.name, "Subscription");
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Subscription"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn failed_first_refresh_does_not_store_subscription() {
     let (url, server) = spawn_sequence_server(vec![http_response(
         "application/json",
@@ -477,8 +576,20 @@ fn xray_bundle(names: &[&str]) -> Vec<u8> {
 }
 
 fn http_response(content_type: &str, body: &[u8]) -> Vec<u8> {
+    http_response_with_headers(content_type, &[], body)
+}
+
+fn http_response_with_headers(
+    content_type: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> Vec<u8> {
+    let headers = headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect::<String>();
     let mut response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
