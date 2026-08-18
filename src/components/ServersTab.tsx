@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link2, Loader2, Plus, Rss, Trash2 } from "lucide-react";
 import { Button } from "@/components/Button";
 import { Badge } from "@/components/Badge";
+import { FlagIcon } from "@/components/FlagIcon";
 import {
   Card,
   CardContent,
@@ -12,7 +13,7 @@ import {
 import { ProfileCard } from "@/components/ProfileCard";
 import { SubscriptionsCard } from "@/components/SubscriptionsCard";
 import { cn } from "@/lib/utils";
-import type { ParseFailure, SubscriptionSummary } from "@/lib/types";
+import type { HomeProfileMetadata, ParseFailure, SubscriptionSummary } from "@/lib/types";
 import type { ConnectionProfile } from "@/lib/connectionProfiles";
 
 export interface ServersTabProps {
@@ -37,6 +38,8 @@ export interface ServersTabProps {
   onSelectSubChild: (subscriptionId: string, childKey: string) => void;
   /** ip → country code from the GeoIP cache (useGeoIp). */
   geoipByIp: Record<string, string>;
+  /** Safe country metadata for ready Xray profiles, keyed by `${subscriptionId}:${key}`. */
+  readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
 }
 
 export function ServersTab({
@@ -58,6 +61,7 @@ export function ServersTab({
   onSetSubInterval,
   onSelectSubChild,
   geoipByIp,
+  readyProfileMetadata,
 }: ServersTabProps) {
   const [addOpen, setAddOpen] = useState(true);
   const [subOpen, setSubOpen] = useState(false);
@@ -275,6 +279,13 @@ export function ServersTab({
                     className="rounded-md border border-border bg-card/40 p-3"
                   >
                     <div className="flex items-center gap-2">
+                      {profile.engine === "xray" && (
+                        <FlagIcon
+                          code={readyProfileMetadata.get(`${profile.subscriptionId}:${profile.key}`)?.country_code ?? "??"}
+                          size={16}
+                          className="shrink-0"
+                        />
+                      )}
                       <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
                         {profile.engine === "singbox" ? "sing-box" : "Xray"}
                       </Badge>

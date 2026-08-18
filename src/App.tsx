@@ -862,6 +862,7 @@ export default function App() {
             parsing={parsing}
             subs={subs.subs}
             geoipByIp={geoip.byIp}
+            readyProfileMetadata={readyProfileMetadata}
             subFetching={subs.fetching}
             onAddSub={subs.add}
             onRemoveSub={subs.remove}
