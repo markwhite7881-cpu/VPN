@@ -588,7 +588,10 @@ impl ProcessManager {
     }
 
     async fn stop_xray_telemetry(&self) {
+        #[cfg(test)]
         let owned_run = self.xray_stats_run_id.swap(0, Ordering::AcqRel);
+        #[cfg(not(test))]
+        self.xray_stats_run_id.swap(0, Ordering::AcqRel);
         self.xray_stats.stop().await;
         #[cfg(test)]
         if owned_run != 0 {
