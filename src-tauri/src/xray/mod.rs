@@ -67,11 +67,12 @@ where
 mod tests {
     use serde_json::json;
 
-    use super::{prepare_xray_runtime_config, UnavailableReason};
+    use super::prepare_xray_runtime_config;
     use crate::config::RoutingOptions;
 
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
-    fn preparation_does_not_mutate_provider_and_sanitizes_diagnostics() {
+    fn preparation_translates_process_rules_without_leaking_provider_secrets() {
         let provider = json!({
             "inbounds": [],
             "outbounds": [{"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"users": [{"id": "secret-uuid"}]}]}}]
@@ -92,13 +93,12 @@ mod tests {
             original["outbounds"][0]["settings"]["vnext"][0]["users"][0]["id"],
             "secret-uuid"
         );
-        assert_eq!(prepared.applicability.unavailable.len(), 1);
-        assert_eq!(prepared.applicability.unavailable[0].rule_id, "rule-1");
-        assert_eq!(prepared.applicability.unavailable[0].label, "Chrome only");
         assert_eq!(
-            prepared.applicability.unavailable[0].reason,
-            UnavailableReason::ProcessMatcher
+            prepared.value["routing"]["rules"][0]["process"],
+            json!(["chrome.exe"])
         );
+        assert_eq!(prepared.applicability.applied_rule_ids, vec!["rule-1"]);
+        assert!(prepared.applicability.unavailable.is_empty());
         let rendered = format!("{:?}", prepared.applicability);
         assert!(!rendered.contains("secret-uuid"));
         assert!(!rendered.contains("vnext"));

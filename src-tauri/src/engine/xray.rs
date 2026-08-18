@@ -1,3 +1,5 @@
+pub mod geodata;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -64,9 +66,14 @@ fn verify_binary(path: PathBuf) -> AppResult<PathBuf> {
     Ok(path)
 }
 
-pub async fn validate_config(binary: &Path, config_path: &Path) -> AppResult<()> {
+pub async fn validate_config(
+    binary: &Path,
+    config_path: &Path,
+    env: &[(std::ffi::OsString, std::ffi::OsString)],
+) -> AppResult<()> {
     let mut command = Command::new(binary);
     command.args(validation_args(config_path));
+    command.envs(env.iter().map(|(key, value)| (key, value)));
     #[cfg(windows)]
     {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;

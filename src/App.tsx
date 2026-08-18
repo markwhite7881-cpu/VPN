@@ -32,6 +32,7 @@ import { useGeoIp } from "@/hooks/useGeoIp";
 import { useReadyProfileMetadata } from "@/hooks/useReadyProfileMetadata";
 import { isSupported } from "@/lib/outbound";
 import { basename } from "@/lib/utils";
+import { shouldFrontendApplySystemProxy } from "@/lib/systemProxy";
 import type {
   BinaryInfo,
   CustomRule,
@@ -559,10 +560,10 @@ export default function App() {
       //    route traffic through it. If `applySystemProxy` fails,
       //    sing-box is still running and the user can configure
       //    the system proxy manually.
-      if (
-        settings.tunnel_mode === "system_proxy" ||
-        settings.tunnel_mode === "both"
-      ) {
+      // Xray owns its dynamically allocated loopback HTTP endpoint in Rust.
+      // Replacing it here with the sing-box default port would black-hole all
+      // system-proxied traffic. Keep this frontend path only for sing-box.
+      if (shouldFrontendApplySystemProxy(next.engine, settings.tunnel_mode)) {
         const port = settings.mixed_port ?? 2080;
         try {
           await api.applySystemProxy("127.0.0.1", port);

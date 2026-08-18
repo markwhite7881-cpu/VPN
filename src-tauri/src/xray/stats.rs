@@ -237,6 +237,8 @@ where
             "Xray stats API port is invalid".into(),
         ));
     }
+    api.entry("tag")
+        .or_insert_with(|| Value::String("cloakwire-stats".into()));
     api.insert("listen".into(), Value::String(format!("127.0.0.1:{port}")));
 
     object_field(root, "stats", "Xray stats must be an object")?;
@@ -346,6 +348,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["stats"], json!({}));
+        assert_eq!(value["api"]["tag"], "cloakwire-stats");
         assert_eq!(value["api"]["listen"], "127.0.0.1:29001");
         assert_eq!(value["api"]["services"], json!(["StatsService"]));
         assert_eq!(value["policy"]["system"]["statsInboundUplink"], true);

@@ -9,6 +9,7 @@ use crate::{
 };
 
 const BLOCK_TAG: &str = "cloakwire-block";
+const DIRECT_TAG: &str = "cloakwire-direct";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,7 +60,10 @@ pub fn merge_routing(
 
     let mut translated = Vec::new();
     let mut applicability = RoutingApplicability::default();
-    add_simple_process_applicability(&mut applicability, routing);
+    let simple =
+        translate_simple_process_rules(&mut applicability, routing, &outbound_tags, &balancer_tags);
+    let needs_direct = simple.needs_direct;
+    translated.extend(simple.rules);
     let mut needs_block = false;
     for rule in routing.rules.iter().filter(|rule| is_enabled(rule)) {
         let rule_id = rule_id(rule);
@@ -95,6 +99,17 @@ pub fn merge_routing(
                 .expect("translated reject rule")
                 .insert("outboundTag".into(), Value::String(block_tag.clone()));
         }
+    }
+    if needs_direct {
+        if outbound_tags.contains(DIRECT_TAG) {
+            return Err(AppError::UnsafeConfig(
+                "provider uses reserved Xray outbound tag".into(),
+            ));
+        }
+        root.get_mut("outbounds")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| AppError::UnsafeConfig("Xray outbounds must be an array".into()))?
+            .push(serde_json::json!({"tag": DIRECT_TAG, "protocol": "freedom"}));
     }
     if needs_block {
         if outbound_tags.contains(BLOCK_TAG) {
@@ -171,6 +186,9 @@ fn translate_rule(
     let mut xray = Map::new();
     for (key, value) in matchers {
         match key.as_str() {
+            "process_name" | "process_path" if supports_process_matcher() => {
+                add_processes(&mut xray, value)?
+            }
             "process_name" | "process_path" | "process_path_regex" => {
                 return Err(UnavailableReason::ProcessMatcher)
             }
@@ -238,7 +256,70 @@ fn translate_rule(
     }
 }
 
-fn add_simple_process_applicability(
+struct SimpleProcessTranslation {
+    rules: Vec<TranslatedRule>,
+    needs_direct: bool,
+}
+
+fn translate_simple_process_rules(
+    applicability: &mut RoutingApplicability,
+    routing: &RoutingOptions,
+    outbound_tags: &HashSet<String>,
+    balancer_tags: &HashSet<String>,
+) -> SimpleProcessTranslation {
+    if !supports_process_matcher() {
+        add_simple_process_unavailable(applicability, routing);
+        return SimpleProcessTranslation {
+            rules: Vec::new(),
+            needs_direct: false,
+        };
+    }
+
+    let mut rules = Vec::new();
+    let direct_processes = simple_processes(&routing.direct_processes);
+    let needs_direct = !direct_processes.is_empty();
+    if needs_direct {
+        applicability
+            .applied_rule_ids
+            .push("simple-direct-processes".into());
+        rules.push(TranslatedRule::Rule(serde_json::json!({
+            "process": direct_processes,
+            "outboundTag": DIRECT_TAG,
+        })));
+    }
+
+    let vpn_processes = simple_processes(&routing.vpn_processes);
+    if !vpn_processes.is_empty() {
+        let rule_id = "simple-vpn-processes";
+        let label = "VPN process routing";
+        if outbound_tags.contains(&routing.final_outbound) {
+            applicability.applied_rule_ids.push(rule_id.into());
+            rules.push(TranslatedRule::Rule(serde_json::json!({
+                "process": vpn_processes,
+                "outboundTag": routing.final_outbound,
+            })));
+        } else if balancer_tags.contains(&routing.final_outbound) {
+            applicability.applied_rule_ids.push(rule_id.into());
+            rules.push(TranslatedRule::Rule(serde_json::json!({
+                "process": vpn_processes,
+                "balancerTag": routing.final_outbound,
+            })));
+        } else {
+            applicability.unavailable.push(UnavailableRule {
+                rule_id: rule_id.into(),
+                label: label.into(),
+                reason: UnavailableReason::MissingOutboundTag,
+            });
+        }
+    }
+
+    SimpleProcessTranslation {
+        needs_direct,
+        rules,
+    }
+}
+
+fn add_simple_process_unavailable(
     applicability: &mut RoutingApplicability,
     routing: &RoutingOptions,
 ) {
@@ -254,7 +335,7 @@ fn add_simple_process_applicability(
             "VPN process routing",
         ),
     ] {
-        if !processes.is_empty() {
+        if !simple_processes(processes).is_empty() {
             applicability.unavailable.push(UnavailableRule {
                 rule_id: rule_id.into(),
                 label: label.into(),
@@ -262,6 +343,18 @@ fn add_simple_process_applicability(
             });
         }
     }
+}
+
+fn supports_process_matcher() -> bool {
+    cfg!(any(target_os = "windows", target_os = "linux"))
+}
+
+fn simple_processes(processes: &[String]) -> Vec<String> {
+    processes
+        .iter()
+        .filter(|process| valid_process(process))
+        .cloned()
+        .collect()
 }
 fn provider_tags(root: &Map<String, Value>, key: &str) -> AppResult<HashSet<String>> {
     root.get(key)
@@ -304,6 +397,19 @@ fn blackhole_tag(root: &Map<String, Value>) -> AppResult<Option<String>> {
             })
             .flatten()
     }))
+}
+
+fn add_processes(output: &mut Map<String, Value>, input: &Value) -> Result<(), UnavailableReason> {
+    let values: Result<Vec<_>, _> = strings(input)?
+        .into_iter()
+        .map(|value| {
+            valid_process(&value)
+                .then(|| Value::String(value))
+                .ok_or(UnavailableReason::UnsupportedMatcher)
+        })
+        .collect();
+    append_values(output, "process", values?);
+    Ok(())
 }
 
 fn add_prefixed(
@@ -452,6 +558,9 @@ fn append_values(output: &mut Map<String, Value>, key: &str, values: Vec<Value>)
         .expect("array")
         .extend(values);
 }
+fn valid_process(value: &str) -> bool {
+    !value.trim().is_empty() && !value.chars().any(char::is_control)
+}
 fn valid_domain(value: &str) -> bool {
     !value.is_empty() && !value.chars().any(char::is_whitespace)
 }
@@ -595,8 +704,38 @@ mod tests {
         assert_eq!(prepared.value["outbounds"].as_array().unwrap().len(), 2);
     }
 
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[test]
-    fn reports_nonempty_simple_process_settings_as_unavailable_without_process_values() {
+    fn translates_simple_process_lists_on_supported_platforms() {
+        let provider = json!({"outbounds":[{"tag":"proxy","protocol":"vless"}]});
+        let mut routing = RoutingOptions::default();
+        routing.vpn_processes = vec!["vpn.exe".into()];
+        routing.direct_processes = vec!["bank.exe".into()];
+
+        let prepared = merge_routing(provider, &routing).unwrap();
+
+        assert_eq!(
+            prepared.value["routing"]["rules"][0],
+            json!({"process":["bank.exe"],"outboundTag":"cloakwire-direct"})
+        );
+        assert_eq!(
+            prepared.value["routing"]["rules"][1],
+            json!({"process":["vpn.exe"],"outboundTag":"proxy"})
+        );
+        assert_eq!(
+            prepared.value["outbounds"][1],
+            json!({"tag":"cloakwire-direct","protocol":"freedom"})
+        );
+        assert_eq!(
+            prepared.applicability.applied_rule_ids,
+            vec!["simple-direct-processes", "simple-vpn-processes"]
+        );
+        assert!(prepared.applicability.unavailable.is_empty());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    #[test]
+    fn reports_simple_process_lists_as_unavailable_on_unsupported_platforms() {
         let provider = json!({"outbounds":[{"tag":"proxy","protocol":"vless"}]});
         let mut routing = RoutingOptions::default();
         routing.vpn_processes = vec!["C:\\Users\\private\\vpn.exe".into()];
@@ -619,8 +758,41 @@ mod tests {
                 },
             ]
         );
+        assert_eq!(prepared.value.get("routing"), None);
         let rendered = format!("{:?}", prepared.applicability);
         assert!(!rendered.contains("C:\\Users\\private"));
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[test]
+    fn translates_custom_process_name_and_path_matchers() {
+        let provider = json!({"outbounds":[{"tag":"proxy","protocol":"vless"}]});
+        let mut routing = RoutingOptions::default();
+        routing.rules = vec![json!({
+            "id": "browser-only",
+            "label": "Browser only",
+            "enabled": true,
+            "matchers": {
+                "process_name": ["chrome.exe"],
+                "process_path": ["C:/Program Files/Browser/browser.exe"]
+            },
+            "action": {"kind": "route", "outbound": "proxy"}
+        })];
+
+        let prepared = merge_routing(provider, &routing).unwrap();
+
+        assert_eq!(
+            prepared.value["routing"]["rules"][0],
+            json!({
+                "process": ["chrome.exe", "C:/Program Files/Browser/browser.exe"],
+                "outboundTag": "proxy"
+            })
+        );
+        assert_eq!(
+            prepared.applicability.applied_rule_ids,
+            vec!["browser-only"]
+        );
+        assert!(prepared.applicability.unavailable.is_empty());
     }
 
     #[test]
