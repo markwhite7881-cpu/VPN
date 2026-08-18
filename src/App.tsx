@@ -1027,6 +1027,27 @@ export default function App() {
         </div>
       </header>
 
+      {reconnectRequired && status.status === "running" && (
+        <div
+          role="status"
+          className="relative z-10 flex items-center justify-between gap-3 border-b border-primary/20 bg-primary/5 px-6 py-2 text-xs"
+        >
+          <p className="text-foreground/80">
+            Settings saved. Reconnect the VPN to apply changes.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void reconnectCurrentProfile()}
+            disabled={busy}
+            aria-busy={busy}
+          >
+            Reconnect now
+          </Button>
+        </div>
+      )}
+
       {/* Body — fills the rest of the viewport with the active tab. */}
       <main className="relative z-10 flex min-h-0 flex-1 flex-col">
         <Tabs
