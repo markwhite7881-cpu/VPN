@@ -87,4 +87,3 @@ Implemented and committed the amended Task 4 backend-first opaque link-list rout
 
 ### Remaining concerns
 - None from this verifier follow-up; the explicit Cargo toolchain was available and all requested Rust, frontend, and whitespace validation passed.
-

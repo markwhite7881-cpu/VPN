@@ -1,6 +1,6 @@
 # Subscription display names: provider-title fallback
 
-**Date:** 2026-08-18  
+**Date:** 2026-08-18
 **Status:** approved design — awaiting specification review
 
 ## Goal

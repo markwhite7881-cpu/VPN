@@ -1,7 +1,7 @@
 # Home telemetry parity for Xray — design
 
-**Date:** 2026-08-18  
-**Status:** approved for specification review  
+**Date:** 2026-08-18
+**Status:** approved for specification review
 **Scope:** make the Home tab report consistent connection state, traffic, country flag, and latency for sing-box and Xray profiles; correct the connected-state power button.
 
 ## Goal
