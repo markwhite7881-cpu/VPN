@@ -118,11 +118,8 @@ pub async fn check_config(app: AppHandle, config_path: String) -> AppResult<Stri
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManagedLaunchInput {
-    #[serde(alias = "manualOutbounds")]
     pub manual_outbounds: Vec<Outbound>,
-    #[serde(alias = "subscriptionLinks")]
     pub subscription_links: Option<Vec<crate::subscriptions::SubscriptionLinkRef>>,
-    #[serde(alias = "selectAllSubscriptionLinks")]
     pub select_all_subscription_links: bool,
     pub settings: GeneratorSettings,
     #[serde(default)]
@@ -1179,24 +1176,8 @@ pub async fn apply_singbox_update(
 
 #[cfg(test)]
 mod managed_launch_tests {
-    use super::{deduplicate_outbounds, ManagedLaunchInput};
-    use crate::{config::GeneratorSettings, parser::Outbound};
-    use serde_json::json;
-
-    #[test]
-    fn managed_launch_input_accepts_webview_camel_case_fields() {
-        let input: ManagedLaunchInput = serde_json::from_value(json!({
-            "manualOutbounds": [],
-            "subscriptionLinks": [],
-            "selectAllSubscriptionLinks": false,
-            "settings": GeneratorSettings::default(),
-        }))
-        .expect("WebView managed-launch payload deserializes");
-
-        assert!(input.manual_outbounds.is_empty());
-        assert_eq!(input.subscription_links, Some(Vec::new()));
-        assert!(!input.select_all_subscription_links);
-    }
+    use super::deduplicate_outbounds;
+    use crate::parser::Outbound;
 
     #[test]
     fn deduplicates_manual_and_subscription_outbounds_in_first_seen_order() {

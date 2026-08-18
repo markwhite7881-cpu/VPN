@@ -120,7 +120,7 @@ pub struct ProcessManager {
     /// Monotonically increasing ID for each launch attempt.
     next_run_id: AtomicU64,
     /// ID currently allowed to mutate runtime state; zero means no active run.
-    active_run_id: AtomicU64,
+    active_run_id: Arc<AtomicU64>,
     /// Run generation currently owning Xray telemetry, or zero when idle.
     xray_stats_run_id: AtomicU64,
     /// Serializes every public API, traffic, and lifecycle transition. Owned
@@ -150,7 +150,7 @@ impl Default for ProcessManager {
             current_config: Mutex::new(None),
             controller_url: Mutex::new(None),
             next_run_id: AtomicU64::new(0),
-            active_run_id: AtomicU64::new(0),
+            active_run_id: Arc::new(AtomicU64::new(0)),
             xray_stats_run_id: AtomicU64::new(0),
             transition: Arc::new(Semaphore::new(1)),
             traffic: Arc::new(TrafficStream::new()),
@@ -571,7 +571,11 @@ impl ProcessManager {
         }
 
         if let Some(app) = app {
-            if let Err(error) = self.xray_stats.start(app, spec).await {
+            if let Err(error) = self
+                .xray_stats
+                .start(app, spec, run_id, Arc::clone(&self.active_run_id))
+                .await
+            {
                 log::warn!("Xray traffic stream start failed: {error}");
                 return;
             }

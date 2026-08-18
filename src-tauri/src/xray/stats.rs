@@ -1,7 +1,10 @@
 use std::{
     fmt,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -63,6 +66,8 @@ impl XrayStatsStream {
         self: &Arc<Self>,
         app: AppHandle,
         spec: XrayStatsSpec,
+        run_id: u64,
+        active_run_id: Arc<AtomicU64>,
     ) -> AppResult<()> {
         self.stop().await;
 
@@ -109,8 +114,10 @@ impl XrayStatsStream {
                                 tokio::time::Instant::now(),
                                 chrono::Utc::now().timestamp_millis(),
                             );
-                            if app_for_task.emit(TrafficSample::EVENT, sample).is_err() {
-                                log::warn!("Xray traffic sample emit failed");
+                            if owns_run(run_id, active_run_id.load(Ordering::Acquire)) {
+                                if app_for_task.emit(TrafficSample::EVENT, sample).is_err() {
+                                    log::warn!("Xray traffic sample emit failed");
+                                }
                             }
                             backoff = Duration::from_millis(500);
                         }
@@ -288,6 +295,10 @@ fn is_loopback_listener(listen: &str) -> bool {
     }
 }
 
+fn owns_run(run_id: u64, active_run_id: u64) -> bool {
+    run_id != 0 && run_id == active_run_id
+}
+
 fn counter_name(traffic_tag: &str, direction: &str) -> String {
     format!("inbound>>>{traffic_tag}>>>traffic>>>{direction}")
 }
@@ -296,7 +307,14 @@ fn counter_name(traffic_tag: &str, direction: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{extract_counter_value, grpc, merge_stats_config};
+    use super::{extract_counter_value, grpc, merge_stats_config, owns_run};
+
+    #[test]
+    fn stale_run_cannot_own_a_traffic_sample_emit() {
+        assert!(owns_run(7, 7));
+        assert!(!owns_run(7, 8));
+        assert!(!owns_run(7, 0));
+    }
 
     #[test]
     fn malformed_or_missing_stat_is_reported_without_panicking() {
