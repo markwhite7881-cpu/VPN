@@ -9,6 +9,7 @@ pub struct ManagedHttpInbound {
     pub value: Value,
     pub proxy_host: String,
     pub proxy_port: u16,
+    pub traffic_tag: String,
     pub injected: bool,
 }
 
@@ -29,7 +30,7 @@ where
         .ok_or_else(|| AppError::UnsafeConfig("Xray inbounds must be an array".into()))?;
 
     let mut candidates = Vec::new();
-    for inbound in inbounds.iter() {
+    for (index, inbound) in inbounds.iter().enumerate() {
         let object = inbound
             .as_object()
             .ok_or_else(|| AppError::UnsafeConfig("Xray inbound must be an object".into()))?;
@@ -53,7 +54,12 @@ where
                 "Xray HTTP inbound must listen on loopback".into(),
             ));
         }
-        candidates.push((listen.to_string(), port));
+        let tag = object
+            .get("tag")
+            .and_then(Value::as_str)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_owned);
+        candidates.push((index, listen.to_string(), port, tag));
     }
 
     match candidates.len() {
@@ -75,15 +81,24 @@ where
                 value,
                 proxy_host: "127.0.0.1".into(),
                 proxy_port: port,
+                traffic_tag: MANAGED_HTTP_TAG.into(),
                 injected: true,
             })
         }
         1 => {
-            let (proxy_host, proxy_port) = candidates.pop().expect("one candidate");
+            let (index, proxy_host, proxy_port, tag) = candidates.pop().expect("one candidate");
+            let traffic_tag = tag.unwrap_or_else(|| {
+                let object = inbounds[index]
+                    .as_object_mut()
+                    .expect("validated Xray inbound object");
+                object.insert("tag".into(), Value::String(MANAGED_HTTP_TAG.into()));
+                MANAGED_HTTP_TAG.into()
+            });
             Ok(ManagedHttpInbound {
                 value,
                 proxy_host,
                 proxy_port,
+                traffic_tag,
                 injected: false,
             })
         }
@@ -109,7 +124,31 @@ fn is_loopback(listen: &str) -> bool {
 mod tests {
     use serde_json::json;
 
-    use super::ensure_managed_http_inbound;
+    use super::{ensure_managed_http_inbound, MANAGED_HTTP_TAG};
+
+    #[test]
+    fn preserves_existing_http_inbound_tag_for_stats() {
+        let result = ensure_managed_http_inbound(
+            json!({"inbounds":[{"tag":"provider-http","listen":"127.0.0.1","port":10809,"protocol":"http"}]}),
+            || Ok(20809),
+        )
+        .unwrap();
+
+        assert_eq!(result.traffic_tag, "provider-http");
+        assert_eq!(result.value["inbounds"][0]["tag"], "provider-http");
+    }
+
+    #[test]
+    fn assigns_reserved_tag_to_untagged_runtime_inbound() {
+        let result = ensure_managed_http_inbound(
+            json!({"inbounds":[{"listen":"127.0.0.1","port":10809,"protocol":"http"}]}),
+            || Ok(20809),
+        )
+        .unwrap();
+
+        assert_eq!(result.traffic_tag, MANAGED_HTTP_TAG);
+        assert_eq!(result.value["inbounds"][0]["tag"], MANAGED_HTTP_TAG);
+    }
 
     #[test]
     fn selects_unambiguous_loopback_http_inbound() {
