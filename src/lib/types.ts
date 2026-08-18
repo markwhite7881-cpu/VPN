@@ -16,6 +16,11 @@ export interface SubscriptionSummary {
 }
 export interface SubscriptionSnapshot { subscriptions: SubscriptionSummary[]; link_outbounds: SubscriptionOutbounds[]; }
 export interface RefreshSubscriptionResult { subscription: SubscriptionSummary; selection_changed: boolean; }
+export interface HomeProfileMetadata {
+  country_code: string | null;
+  latency_ms: number | null;
+}
+
 export interface AddSubscriptionInput { name: string; url: string; intervalMinutes: number; }
 export interface SubscriptionLinkRef { subscription_id: string; link_key: string; }
 export interface ManagedLaunchResult { status: StatusReport; config_path: string; profile_count: number; }

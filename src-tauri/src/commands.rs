@@ -139,10 +139,27 @@ pub struct ReadyProfileInput {
     pub routing: config::RoutingOptions,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReadyProfileMetadataInput {
+    pub subscription_id: String,
+    pub child_key: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadyProfileResult {
     pub status: StatusReport,
     pub routing: crate::xray::RoutingApplicability,
+}
+
+#[tauri::command]
+pub async fn get_ready_profile_metadata(
+    subscriptions: State<'_, Arc<SubscriptionService>>,
+    input: ReadyProfileMetadataInput,
+) -> AppResult<crate::xray::presentation::HomeProfileMetadata> {
+    let profile = subscriptions
+        .resolve_child_profile(&input.subscription_id, &input.child_key)
+        .await?;
+    crate::xray::presentation::resolve_profile_metadata(&profile).await
 }
 
 /// Resolve a stored subscription child and start it through its engine-specific lifecycle.

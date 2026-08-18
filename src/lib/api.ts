@@ -14,6 +14,7 @@ import type {
   RefreshSubscriptionResult,
   SubscriptionSummary,
   GeneratorSettings,
+  HomeProfileMetadata,
   LogLine,
   Outbound,
   ParseLinksResult,
@@ -111,6 +112,11 @@ export const api = {
     call<[string, string][]>("lookup_geoip", { ips }),
 
   listSubscriptions: () => call<SubscriptionSnapshot>("list_subscriptions"),
+  getReadyProfileMetadata: (subscriptionId: string, childKey: string) =>
+    call<HomeProfileMetadata>("get_ready_profile_metadata", {
+      input: { subscription_id: subscriptionId, child_key: childKey },
+    }),
+
   addSubscription: (input: AddSubscriptionInput) => call<RefreshSubscriptionResult>("add_subscription", { input }),
   removeSubscription: (id: string) => call<void>("remove_subscription", { id }),
   refreshSubscription: (id: string) => call<RefreshSubscriptionResult>("refresh_subscription", { id }),
