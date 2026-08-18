@@ -33,7 +33,7 @@ pub async fn resolve_profile_metadata(
     let country_code = infer_country_code(&profile.name);
     let Some((host, port)) = extract_endpoint(&profile.config) else {
         return Ok(HomeProfileMetadata {
-            country_code: None,
+            country_code,
             latency_ms: None,
         });
     };
@@ -47,7 +47,7 @@ pub async fn resolve_profile_metadata(
     .is_ok_and(|result| result.is_ok());
     if !connected {
         return Ok(HomeProfileMetadata {
-            country_code: None,
+            country_code,
             latency_ms: None,
         });
     }
@@ -116,57 +116,153 @@ fn extract_from_outbound(value: &Value) -> Option<(String, u16)> {
 }
 
 fn infer_country_code(label: &str) -> Option<String> {
+    let regional_indicators = label
+        .chars()
+        .filter(|character| ('🇦'..='🇿').contains(character))
+        .collect::<Vec<_>>();
+    if let [first, second, ..] = regional_indicators.as_slice() {
+        let first = (*first as u32).checked_sub('🇦' as u32)?;
+        let second = (*second as u32).checked_sub('🇦' as u32)?;
+        if first < 26 && second < 26 {
+            return Some(format!(
+                "{}{}",
+                (b'A' + first as u8) as char,
+                (b'A' + second as u8) as char,
+            ));
+        }
+    }
+
+    let normalized = label.to_lowercase();
+    for (name, code) in COUNTRY_NAMES {
+        if normalized.contains(name) {
+            return Some((*code).to_owned());
+        }
+    }
+
     label
         .split(|c: char| !c.is_ascii_alphabetic())
         .filter(|part| part.len() == 2)
         .map(str::to_ascii_uppercase)
-        .find(|part| {
-            matches!(
-                part.as_str(),
-                "AT" | "AU"
-                    | "BE"
-                    | "BR"
-                    | "CA"
-                    | "CH"
-                    | "CN"
-                    | "CZ"
-                    | "DE"
-                    | "DK"
-                    | "ES"
-                    | "FI"
-                    | "FR"
-                    | "GB"
-                    | "HK"
-                    | "IE"
-                    | "IL"
-                    | "IN"
-                    | "IT"
-                    | "JP"
-                    | "KR"
-                    | "LT"
-                    | "LU"
-                    | "NL"
-                    | "NO"
-                    | "NZ"
-                    | "PL"
-                    | "PT"
-                    | "RO"
-                    | "SE"
-                    | "SG"
-                    | "TR"
-                    | "TW"
-                    | "UA"
-                    | "US"
-                    | "VN"
-            )
-        })
+        .find(|part| is_country_code(part))
 }
+
+fn is_country_code(code: &str) -> bool {
+    matches!(
+        code,
+        "AT" | "AU"
+            | "BE"
+            | "BR"
+            | "CA"
+            | "CH"
+            | "CN"
+            | "CZ"
+            | "DE"
+            | "DK"
+            | "ES"
+            | "FI"
+            | "FR"
+            | "GB"
+            | "HK"
+            | "IE"
+            | "IL"
+            | "IN"
+            | "IT"
+            | "JP"
+            | "KR"
+            | "LT"
+            | "LU"
+            | "NL"
+            | "NO"
+            | "NZ"
+            | "PL"
+            | "PT"
+            | "RO"
+            | "SE"
+            | "SG"
+            | "TR"
+            | "TW"
+            | "UA"
+            | "US"
+            | "VN"
+            | "KZ"
+            | "RU"
+    )
+}
+
+const COUNTRY_NAMES: &[(&str, &str)] = &[
+    ("united kingdom", "GB"),
+    ("great britain", "GB"),
+    ("england", "GB"),
+    ("netherlands", "NL"),
+    ("holland", "NL"),
+    ("germany", "DE"),
+    ("france", "FR"),
+    ("spain", "ES"),
+    ("italy", "IT"),
+    ("poland", "PL"),
+    ("sweden", "SE"),
+    ("finland", "FI"),
+    ("norway", "NO"),
+    ("denmark", "DK"),
+    ("ireland", "IE"),
+    ("belgium", "BE"),
+    ("portugal", "PT"),
+    ("greece", "GR"),
+    ("ukraine", "UA"),
+    ("belarus", "BY"),
+    ("japan", "JP"),
+    ("korea", "KR"),
+    ("china", "CN"),
+    ("taiwan", "TW"),
+    ("hong kong", "HK"),
+    ("singapore", "SG"),
+    ("india", "IN"),
+    ("turkey", "TR"),
+    ("canada", "CA"),
+    ("australia", "AU"),
+    ("switzerland", "CH"),
+    ("austria", "AT"),
+    ("великобритания", "GB"),
+    ("англия", "GB"),
+    ("нидерланды", "NL"),
+    ("голландия", "NL"),
+    ("германия", "DE"),
+    ("франция", "FR"),
+    ("испания", "ES"),
+    ("италия", "IT"),
+    ("польша", "PL"),
+    ("швеция", "SE"),
+    ("финляндия", "FI"),
+    ("норвегия", "NO"),
+    ("дания", "DK"),
+    ("ирландия", "IE"),
+    ("бельгия", "BE"),
+    ("португалия", "PT"),
+    ("греция", "GR"),
+    ("украина", "UA"),
+    ("беларусь", "BY"),
+    ("япония", "JP"),
+    ("корея", "KR"),
+    ("китай", "CN"),
+    ("тайвань", "TW"),
+    ("гонконг", "HK"),
+    ("сингапур", "SG"),
+    ("индия", "IN"),
+    ("турция", "TR"),
+    ("канада", "CA"),
+    ("австралия", "AU"),
+    ("швейцария", "CH"),
+    ("австрия", "AT"),
+    ("казахстан", "KZ"),
+    ("россия", "RU"),
+];
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{extract_endpoint, metadata_for_config, HomeProfileMetadata};
+    use crate::subscriptions::{EngineKind, ResolvedChildProfile};
 
     #[test]
     fn safe_metadata_contains_only_country_and_latency() {
@@ -207,6 +303,53 @@ mod tests {
         assert_eq!(endpoints[2], ("trojan.synthetic.invalid".into(), 443));
         assert_eq!(endpoints[3], ("ss.synthetic.invalid".into(), 8388));
         assert_eq!(endpoints[4], ("nested.synthetic.invalid".into(), 443));
+    }
+
+    #[test]
+    fn country_inference_accepts_flag_emoji_and_russian_names() {
+        let emoji_metadata = metadata_for_config(
+            &json!({
+                "remarks": "🇩🇪 Германия — Reality",
+                "outbounds": [{
+                    "protocol": "vless",
+                    "settings": {"vnext": [{"address": "de.synthetic.invalid", "port": 443}]}
+                }]
+            }),
+            Some(("DE".into(), 47)),
+        );
+        let russian_metadata = metadata_for_config(
+            &json!({
+                "remarks": "Нидерланды 01",
+                "outbounds": [{
+                    "protocol": "vless",
+                    "settings": {"vnext": [{"address": "nl.synthetic.invalid", "port": 443}]}
+                }]
+            }),
+            Some(("NL".into(), 52)),
+        );
+
+        assert_eq!(emoji_metadata.country_code.as_deref(), Some("DE"));
+        assert_eq!(russian_metadata.country_code.as_deref(), Some("NL"));
+    }
+
+    #[tokio::test]
+    async fn country_code_survives_failed_latency_probe() {
+        let metadata = super::resolve_profile_metadata(&ResolvedChildProfile {
+            key: "profile-1".into(),
+            name: "🇩🇪 Reality".into(),
+            engine: EngineKind::Xray,
+            config: json!({
+                "outbounds": [{
+                    "protocol": "vless",
+                    "settings": {"vnext": [{"address": "127.0.0.1", "port": 1}]}
+                }]
+            }),
+        })
+        .await
+        .expect("metadata resolution should be non-fatal");
+
+        assert_eq!(metadata.country_code.as_deref(), Some("DE"));
+        assert_eq!(metadata.latency_ms, None);
     }
 
     #[test]
