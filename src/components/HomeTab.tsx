@@ -531,7 +531,7 @@ function GroupedHomeProfileRows({
   }, [selectedSubscriptionId]);
 
   const renderRows = (rows: IndexedHomeProfile[]) => rows.map((row) => (
-    <li key={`${row.index}-${connectionProfileDisplay(row.profile, readyProfileMetadata, geoipByIp, latencyByTag).key}`}>
+    <li className="list-none" key={`${row.index}-${connectionProfileDisplay(row.profile, readyProfileMetadata, geoipByIp, latencyByTag).key}`}>
       <ProfileChoice
         row={row}
         selectedIndex={selectedIndex}
@@ -548,7 +548,7 @@ function GroupedHomeProfileRows({
   const content = (
     <>
       {grouped.manual.length > 0 && (
-        <li>
+        <li className="list-none">
           <div className="px-2 pb-1 pt-1 text-[10px] uppercase tracking-wider text-muted-foreground">Manual servers</div>
           {mode === "grid" ? (
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
@@ -556,13 +556,13 @@ function GroupedHomeProfileRows({
                 <ProfileChoice key={row.index} row={row} selectedIndex={selectedIndex} readyProfileMetadata={readyProfileMetadata} geoipByIp={geoipByIp} latencyByTag={latencyByTag} onSelect={onSelect} onSelectionDone={onSelectionDone} compact={false} />
               ))}
             </div>
-          ) : <ul>{renderRows(grouped.manual)}</ul>}
+          ) : <ul className="list-none">{renderRows(grouped.manual)}</ul>}
         </li>
       )}
       {grouped.subscriptions.map((group) => {
         const isExpanded = expanded.has(group.id);
         return (
-          <li key={group.id}>
+          <li className="list-none" key={group.id}>
             <button
               type="button"
               onClick={() => setExpanded((current) => {
@@ -583,7 +583,7 @@ function GroupedHomeProfileRows({
                   <ProfileChoice key={row.index} row={row} selectedIndex={selectedIndex} readyProfileMetadata={readyProfileMetadata} geoipByIp={geoipByIp} latencyByTag={latencyByTag} onSelect={onSelect} onSelectionDone={onSelectionDone} compact={false} />
                 ))}
               </div>
-            ) : <ul>{renderRows(group.rows)}</ul>)}
+            ) : <ul className="list-none">{renderRows(group.rows)}</ul>)}
           </li>
         );
       })}
