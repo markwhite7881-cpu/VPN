@@ -328,6 +328,7 @@ impl SubscriptionService {
             .await?;
         let mut candidate = current.clone();
         candidate.metadata = payload.metadata;
+        apply_provider_title_fallback(&mut candidate);
         candidate.last_http_status = Some(payload.status);
         candidate.last_success_at = Some(Utc::now());
         candidate.last_error = None;
@@ -361,6 +362,22 @@ impl SubscriptionService {
         validate_candidate(&candidate)?;
         Ok(candidate)
     }
+}
+
+fn apply_provider_title_fallback(record: &mut SubscriptionRecord) {
+    if record.name.trim() != "Subscription" {
+        return;
+    }
+    let Some(title) = record
+        .metadata
+        .profile_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    else {
+        return;
+    };
+    record.name = title.to_owned();
 }
 
 fn apply_bundle(
