@@ -16,7 +16,7 @@ import type {
   GeneratorSettings,
   Outbound,
   SingboxVersion,
-  Status,
+  StatusReport,
 } from "@/lib/types";
 
 const inTauri =
@@ -26,7 +26,7 @@ export interface ConfigTabProps {
   configPath: string;
   binary: BinaryInfo | null;
   version: SingboxVersion | null;
-  statusLabel: Status;
+  status: StatusReport;
   profiles: Outbound[];
   settings: GeneratorSettings;
   onSettingsChange: (next: GeneratorSettings) => void;
@@ -40,7 +40,7 @@ export function ConfigTab({
   configPath,
   binary,
   version,
-  statusLabel,
+  status,
   profiles,
   settings,
   onSettingsChange,
@@ -106,7 +106,7 @@ export function ConfigTab({
 
       {/* Live: proxies (only useful when running; the home tab
           already shows live traffic, so we don't repeat it here). */}
-      <ProxiesCard status={statusLabel} />
+      <ProxiesCard status={status} />
 
       {/* Binary info */}
       <Card>

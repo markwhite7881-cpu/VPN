@@ -881,7 +881,7 @@ export default function App() {
             configPath={configPath}
             binary={binary}
             version={version}
-            statusLabel={status.status}
+            status={status}
             profiles={manualProfiles}
             settings={settings}
             onSettingsChange={setSettings}

@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { Badge } from "./Badge";
 import { Button } from "./Button";
 import { cn } from "@/lib/utils";
-import type { ProxiesResponse, Status, ProxyInfo } from "@/lib/types";
+import type { ProxiesResponse, StatusReport, ProxyInfo } from "@/lib/types";
 
 const inTauri =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -49,8 +49,17 @@ function delayColor(d: number | null | undefined): string {
   return "text-destructive";
 }
 
+export function proxiesCapability(
+  status: StatusReport,
+): "available" | "xray_unsupported" | "stopped" {
+  if (status.status === "running" && status.engine === "xray") {
+    return "xray_unsupported";
+  }
+  return status.status === "running" ? "available" : "stopped";
+}
+
 interface Props {
-  status: Status;
+  status: StatusReport;
 }
 
 export function ProxiesCard({ status }: Props) {
@@ -81,9 +90,19 @@ export function ProxiesCard({ status }: Props) {
     }
   }, [collapsed]);
 
-  const isRunning = status === "running";
+  const capability = proxiesCapability(status);
+  const isRunning = status.status === "running";
+  const isXrayUnsupported = capability === "xray_unsupported";
 
   const refresh = useCallback(async () => {
+    if (isXrayUnsupported) {
+      setData(null);
+      setError(null);
+      setPending(false);
+      setTesting(null);
+      setLatencies({});
+      return;
+    }
     if (!inTauri) {
       setData(DEMO_PROXIES);
       return;
@@ -99,17 +118,17 @@ export function ProxiesCard({ status }: Props) {
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [isRunning]);
+  }, [isRunning, isXrayUnsupported]);
 
   useEffect(() => {
     refresh();
-    if (!isRunning) return;
+    if (capability !== "available") return;
     const t = setInterval(refresh, 3000);
     return () => clearInterval(t);
-  }, [refresh, isRunning]);
+  }, [capability, refresh]);
 
   const onSelect = async (group: string, member: string) => {
-    if (!inTauri) return;
+    if (!inTauri || capability !== "available") return;
     setPending(true);
     setError(null);
     try {
@@ -123,7 +142,7 @@ export function ProxiesCard({ status }: Props) {
   };
 
   const onTest = async (name: string) => {
-    if (!inTauri) return;
+    if (!inTauri || capability !== "available") return;
     setTesting(name);
     setError(null);
     try {
@@ -158,9 +177,13 @@ export function ProxiesCard({ status }: Props) {
                 {groups.length}
               </Badge>
             </h3>
-            {isRunning ? (
+            {capability === "available" ? (
               <Badge variant="default" className="px-1.5 py-0 text-[10px]">
                 live
+              </Badge>
+            ) : capability === "xray_unsupported" ? (
+              <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                unavailable
               </Badge>
             ) : (
               <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
@@ -169,7 +192,9 @@ export function ProxiesCard({ status }: Props) {
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            Switch the active outbound and measure latency via the Clash API.
+            {isXrayUnsupported
+              ? "Proxy groups and Clash latency tests are available for sing-box connections."
+              : "Switch the active outbound and measure latency via the Clash API."}
           </p>
         </div>
         <ChevronDown
@@ -181,37 +206,47 @@ export function ProxiesCard({ status }: Props) {
       </button>
       {!collapsed && (
         <div className="space-y-2 p-5 pt-0">
-          {error && (
-            <p className="text-[11px] text-destructive">{error}</p>
-          )}
-          {!isRunning && (
+          {isXrayUnsupported ? (
             <p className="rounded border border-border bg-card/40 p-3 text-[11px] text-muted-foreground">
-              Start sing-box to populate the proxy list. Open the Config
-              builder, click <strong>Generate</strong>, then <strong>Start</strong>.
+              Proxy groups and Clash latency tests are available for sing-box
+              connections. To change an Xray server, select another profile on
+              Home.
             </p>
+          ) : (
+            <>
+              {error && (
+                <p className="text-[11px] text-destructive">{error}</p>
+              )}
+              {!isRunning && (
+                <p className="rounded border border-border bg-card/40 p-3 text-[11px] text-muted-foreground">
+                  Start sing-box to populate the proxy list. Open the Config
+                  builder, click <strong>Generate</strong>, then <strong>Start</strong>.
+                </p>
+              )}
+              {isRunning && groups.length === 0 && (
+                <p className="rounded border border-border bg-card/40 p-3 text-[11px] text-muted-foreground">
+                  No selector / URLTest groups found. Make sure the config has
+                  a <code className="font-mono">selector</code> outbound tagged{" "}
+                  <code className="font-mono">proxy</code>.
+                </p>
+              )}
+              <div className="space-y-2">
+                {groups.map(([name, info]) => (
+                  <ProxyGroup
+                    key={name}
+                    name={name}
+                    info={info}
+                    onSelect={(member) => onSelect(name, member)}
+                    onTest={onTest}
+                    testing={testing}
+                    pending={pending}
+                    disabled={!inTauri}
+                    extraLatency={latencies}
+                  />
+                ))}
+              </div>
+            </>
           )}
-          {isRunning && groups.length === 0 && (
-            <p className="rounded border border-border bg-card/40 p-3 text-[11px] text-muted-foreground">
-              No selector / URLTest groups found. Make sure the config has
-              a <code className="font-mono">selector</code> outbound tagged{" "}
-              <code className="font-mono">proxy</code>.
-            </p>
-          )}
-          <div className="space-y-2">
-            {groups.map(([name, info]) => (
-              <ProxyGroup
-                key={name}
-                name={name}
-                info={info}
-                onSelect={(member) => onSelect(name, member)}
-                onTest={onTest}
-                testing={testing}
-                pending={pending}
-                disabled={!inTauri}
-                extraLatency={latencies}
-              />
-            ))}
-          </div>
         </div>
       )}
     </div>
