@@ -301,6 +301,113 @@ async fn legacy_fetch_rejects_full_configuration_bundle() {
 }
 
 #[tokio::test]
+async fn refresh_of_persisted_generic_name_adopts_provider_title() {
+    let (service, id, server) = service_with_name_and_responses(
+        "Subscription",
+        vec![
+            http_response("text/plain", b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel"),
+            http_response_with_headers(
+                "text/plain",
+                &[("Profile-Title", "Anivka")],
+                b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+            ),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Subscription"
+    );
+    let refreshed = service.refresh(&id).await.unwrap();
+
+    assert_eq!(refreshed.subscription.name, "Anivka");
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Anivka"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn refresh_without_provider_title_preserves_persisted_generic_name() {
+    let (service, id, server) = service_with_name_and_responses(
+        "Subscription",
+        vec![
+            http_response("text/plain", b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel"),
+            http_response("text/plain", b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel"),
+        ],
+    )
+    .await;
+
+    let refreshed = service.refresh(&id).await.unwrap();
+
+    assert_eq!(refreshed.subscription.name, "Subscription");
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Subscription"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn failed_refresh_preserves_existing_subscription_name() {
+    let (service, id, server) = service_with_name_and_responses(
+        "Subscription",
+        vec![
+            http_response_with_headers(
+                "text/plain",
+                &[("Profile-Title", "Kept title")],
+                b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+            ),
+            http_response("application/json", br#"[{"not":"classifiable"}]"#),
+        ],
+    )
+    .await;
+
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Kept title"
+    );
+    assert!(service.refresh(&id).await.is_err());
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "Kept title"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn migrate_legacy_generic_name_adopts_provider_title() {
+    let (url, server) = spawn_sequence_server(vec![http_response_with_headers(
+        "text/plain",
+        &[("Profile-Title", "Anivka")],
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    )])
+    .await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let snapshot = service
+        .migrate_legacy(vec![super::LegacySubscriptionInput {
+            id: "legacy-subscription".into(),
+            name: "Subscription".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        }])
+        .await
+        .unwrap();
+
+    assert_eq!(snapshot.subscriptions[0].name, "Anivka");
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn provider_title_replaces_generic_subscription_name() {
     let response = http_response_with_headers(
         "text/plain",
@@ -529,6 +636,13 @@ async fn mixed_bundle_refresh_rejects_the_entire_candidate() {
 async fn service_with_responses(
     responses: Vec<Vec<u8>>,
 ) -> (SubscriptionService, String, tokio::task::JoinHandle<()>) {
+    service_with_name_and_responses("Provider", responses).await
+}
+
+async fn service_with_name_and_responses(
+    name: &str,
+    responses: Vec<Vec<u8>>,
+) -> (SubscriptionService, String, tokio::task::JoinHandle<()>) {
     let (url, server) = spawn_sequence_server(responses).await;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.keep();
@@ -540,7 +654,7 @@ async fn service_with_responses(
     );
     let added = service
         .add(AddSubscriptionInput {
-            name: "Provider".into(),
+            name: name.into(),
             url: url.to_string(),
             interval_minutes: 60,
         })
