@@ -2,6 +2,7 @@
 
 pub mod inbound;
 pub mod routing;
+pub mod stats;
 
 use serde_json::Value;
 
@@ -15,6 +16,7 @@ pub struct PreparedXrayConfig {
     pub proxy_host: String,
     pub proxy_port: u16,
     pub applicability: RoutingApplicability,
+    pub(crate) stats: stats::XrayStatsSpec,
 }
 
 /// Clone and prepare a provider config only for the running Xray process.
@@ -22,18 +24,21 @@ pub struct PreparedXrayConfig {
 pub fn prepare_xray_runtime_config<F>(
     provider: Value,
     routing: &RoutingOptions,
-    port_allocator: F,
+    mut port_allocator: F,
 ) -> AppResult<PreparedXrayConfig>
 where
-    F: FnOnce() -> AppResult<u16>,
+    F: FnMut() -> AppResult<u16>,
 {
-    let inbound = inbound::ensure_managed_http_inbound(provider, port_allocator)?;
+    let inbound = inbound::ensure_managed_http_inbound(provider, &mut port_allocator)?;
     let routing = routing::merge_routing(inbound.value, routing)?;
+    let (value, stats) =
+        stats::merge_stats_config(routing.value, &inbound.traffic_tag, port_allocator)?;
     Ok(PreparedXrayConfig {
-        value: routing.value,
+        value,
         proxy_host: inbound.proxy_host,
         proxy_port: inbound.proxy_port,
         applicability: routing.applicability,
+        stats,
     })
 }
 

@@ -1,4 +1,14 @@
 fn main() {
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("locate vendored protoc");
+    // SAFETY: build.rs runs single-threaded before any generated-code build work starts.
+    unsafe {
+        std::env::set_var("PROTOC", protoc);
+    }
+    tonic_build::configure()
+        .build_server(false)
+        .compile_protos(&["proto/xray_stats.proto"], &["proto"])
+        .expect("compile Xray stats protobuf");
+
     // Custom build attributes for Tauri.
     //
     // The big one: `app_manifest` overrides Tauri's default Windows
