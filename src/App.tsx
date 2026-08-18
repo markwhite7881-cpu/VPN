@@ -538,19 +538,19 @@ export default function App() {
     };
   }, [status.status, refresh]);
 
-  const onStart = useCallback(async () => {
+  const onStart = useCallback(async (): Promise<boolean> => {
     if (!inTauri) {
       setError("Preview mode — start the Tauri shell to actually run sing-box.");
-      return;
+      return false;
     }
     if (!canStartManagedSelection(profiles, selectedIndex)) {
       setError("Selected subscription configuration is not executable yet.");
-      return;
+      return false;
     }
     const selection = managedSelectionForProfile(manualProfiles, profiles, selectedIndex);
     if (!selection) {
       setError("Selected subscription configuration is not executable yet.");
-      return;
+      return false;
     }
     setBusy(true);
     setError(null);
@@ -595,8 +595,10 @@ export default function App() {
 
       await refresh();
       setActiveTab("home");
+      return true;
     } catch (e) {
       setError(humanError(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -609,6 +611,34 @@ export default function App() {
   useEffect(() => {
     onStartRef.current = onStart;
   }, [onStart]);
+
+  const reconnectCurrentProfile = useCallback(async (): Promise<boolean> => {
+    if (!inTauri) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      try {
+        await api.clearSystemProxy();
+      } catch {
+        // best-effort; the process stop/start remains authoritative
+      }
+      const next = await api.stop();
+      setStatus(next);
+      // Yield so React commits the latest selected profile/settings before
+      // the ref-backed start flow reads them.
+      await Promise.resolve();
+      const started = await onStartRef.current();
+      if (started) {
+        setReconnectRequired(false);
+      }
+      return started;
+    } catch (e) {
+      setError(humanError(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const onStop = useCallback(async () => {
     if (!inTauri) return;
@@ -774,39 +804,14 @@ export default function App() {
         default_outbound: pickedTag,
       }));
       if (selectedProfile?.kind === "ready_config") return;
-      // If sing-box is already up, take it down cleanly, regenerate
-      // the config with the new `default_outbound` baked into the
-      // selector's `default`, then bring it back up. This is a
-      // 1-2 s gap, but it's the only path that is 100% reliable:
-      // `PUT /proxies/proxy` for hot-swapping the selector
-      // member is racy on some sing-box versions and the user
-      // has reported it sometimes leaves the selector on the old
-      // server even though the API returns 204. A full
-      // disconnect → regen → reconnect is boring, but boring is
-      // exactly what you want from a VPN.
+      // A full disconnect → regen → reconnect is the only path that is
+      // 100% reliable across sing-box versions.
       if (status.status === "running") {
-        setBusy(true);
-        setError(null);
-        try {
-          try {
-            await api.clearSystemProxy();
-          } catch {
-            // best effort; we re-apply right after
-          }
-          const next = await api.stop();
-          setStatus(next);
-          // Yield so React commits the new `default_outbound`
-          // before onStart reads it.
-          await Promise.resolve();
-          await onStartRef.current();
-        } catch (e) {
-          setError(humanError(e));
-        } finally {
-          setBusy(false);
-        }
+        await Promise.resolve();
+        await reconnectCurrentProfile();
       }
     },
-    [profiles, status.status],
+    [profiles, status.status, reconnectCurrentProfile],
   );
 
   const onRemoveProfile = useCallback((idx: number) => {
