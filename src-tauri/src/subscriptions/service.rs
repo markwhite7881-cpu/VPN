@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use base64::Engine;
 use chrono::Utc;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -327,8 +328,9 @@ impl SubscriptionService {
             .fetch(&url, self.hwid.get_or_create()?, &self.version, "Windows")
             .await?;
         let mut candidate = current.clone();
+        let previous_profile_title = candidate.metadata.profile_title.clone();
         candidate.metadata = payload.metadata;
-        apply_provider_title_fallback(&mut candidate);
+        apply_provider_title_fallback(&mut candidate, previous_profile_title.as_deref());
         candidate.last_http_status = Some(payload.status);
         candidate.last_success_at = Some(Utc::now());
         candidate.last_error = None;
@@ -364,10 +366,10 @@ impl SubscriptionService {
     }
 }
 
-fn apply_provider_title_fallback(record: &mut SubscriptionRecord) {
-    if record.name.trim() != "Subscription" {
-        return;
-    }
+fn apply_provider_title_fallback(
+    record: &mut SubscriptionRecord,
+    previous_profile_title: Option<&str>,
+) {
     let Some(title) = record
         .metadata
         .profile_title
@@ -377,7 +379,29 @@ fn apply_provider_title_fallback(record: &mut SubscriptionRecord) {
     else {
         return;
     };
-    record.name = title.to_owned();
+    let Some(resolved_title) = decode_provider_title(title) else {
+        return;
+    };
+
+    if record.name.trim() == "Subscription"
+        || previous_profile_title
+            .map(str::trim)
+            .is_some_and(|previous| record.name == previous && previous == title)
+    {
+        record.name = resolved_title;
+    }
+}
+
+fn decode_provider_title(title: &str) -> Option<String> {
+    let Some(encoded) = title.strip_prefix("base64:") else {
+        return Some(title.to_owned());
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    String::from_utf8(bytes)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
 }
 
 fn apply_bundle(

@@ -441,6 +441,65 @@ async fn provider_title_replaces_generic_subscription_name() {
 }
 
 #[tokio::test]
+async fn base64_provider_title_is_decoded_for_generic_subscription_name() {
+    let response = http_response_with_headers(
+        "text/plain",
+        &[(
+            "Profile-Title",
+            "base64:8J+OqUhhdFZQTiDigKIg0KPRgdGC0YDQvtC50YHRgtCy0L4gMw==",
+        )],
+        b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+    );
+    let (url, server) = spawn_sequence_server(vec![response]).await;
+    let directory = tempfile::tempdir().unwrap();
+    let service = SubscriptionService::new(
+        SubscriptionStore::new(directory.path().join("subscriptions.json")),
+        HwidStore::new(directory.path().join("device-id")),
+        SubscriptionHttpClient::new().unwrap(),
+        "1.3.0".into(),
+    );
+
+    let added = service
+        .add(AddSubscriptionInput {
+            name: "Subscription".into(),
+            url: url.to_string(),
+            interval_minutes: 60,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(added.subscription.name, "🎩HatVPN • Устройство 3");
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn stored_encoded_provider_title_is_migrated_on_refresh() {
+    const RAW_TITLE: &str = "base64:8J+OqUhhdFZQTiDigKIg0KPRgdGC0YDQvtC50YHRgtCy0L4gMw==";
+    let response = || {
+        http_response_with_headers(
+            "text/plain",
+            &[("Profile-Title", RAW_TITLE)],
+            b"vless://11111111-1111-4111-8111-111111111111@server-address.example.test:443?security=tls#ProviderLabel",
+        )
+    };
+    let (service, id, server) =
+        service_with_name_and_responses(RAW_TITLE, vec![response(), response()]).await;
+
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        RAW_TITLE
+    );
+    let refreshed = service.refresh(&id).await.unwrap();
+
+    assert_eq!(refreshed.subscription.name, "🎩HatVPN • Устройство 3");
+    assert_eq!(
+        service.list().await.unwrap().subscriptions[0].name,
+        "🎩HatVPN • Устройство 3"
+    );
+    let _ = server.await;
+}
+
+#[tokio::test]
 async fn custom_subscription_name_wins_over_provider_title() {
     let response = http_response_with_headers(
         "text/plain",
