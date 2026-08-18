@@ -39,7 +39,28 @@ fn main() {
         };
         attrs =
             attrs.windows_attributes(tauri_build::WindowsAttributes::new().app_manifest(combined));
+        // Rust library test harnesses are linked separately from the Tauri
+        // application and therefore do not inherit its embedded manifest.
+        // The crate's Tauri/dialog dependency imports TaskDialogIndirect from
+        // comctl32.dll, which requires the v6 Common Controls activation
+        // context even though the test harness does not need UAC elevation.
+        let test_manifest_path = manifest_path.with_file_name("test.manifest");
         println!("cargo:rerun-if-changed=app.manifest");
+        println!("cargo:rerun-if-changed={}", test_manifest_path.display());
+        println!("cargo:rerun-if-env-changed=CLOAKWIRE_TEST_MANIFEST");
+        // `cargo test --lib` links a unit-test harness as a library target,
+        // not as Cargo's separate `test` target. Keep the link flags opt-in
+        // so release binaries retain the Tauri-owned production manifest.
+        if std::env::var_os("CLOAKWIRE_TEST_MANIFEST").is_some() {
+            let test_manifest = test_manifest_path
+                .canonicalize()
+                .expect("canonicalize test.manifest");
+            println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+            println!(
+                "cargo:rustc-link-arg=/MANIFESTINPUT:{}",
+                test_manifest.display()
+            );
+        }
     }
     tauri_build::try_build(attrs).expect("tauri build");
 }
