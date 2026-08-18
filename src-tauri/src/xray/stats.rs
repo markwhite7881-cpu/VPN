@@ -172,7 +172,12 @@ mod tests {
     fn merge_preserves_existing_api_services_and_policy_fields() {
         let (value, _) = merge_stats_config(
             json!({
-                "api": {"tag":"provider-api","listen":"127.0.0.1:9000","services":["HandlerService"]},
+                "api": {
+                    "tag": "provider-api",
+                    "listen": "127.0.0.1:9000",
+                    "services": ["HandlerService", "StatsService"],
+                    "customApiField": {"enabled": true}
+                },
                 "policy": {"levels":{"0":{"handshake":4}},"system":{"statsInboundUplink":false}},
                 "stats": {"existing": true}
             }),
@@ -187,6 +192,7 @@ mod tests {
             value["api"]["services"],
             json!(["HandlerService", "StatsService"])
         );
+        assert_eq!(value["api"]["customApiField"], json!({"enabled": true}));
         assert_eq!(value["policy"]["levels"]["0"]["handshake"], 4);
         assert_eq!(value["policy"]["system"]["statsInboundUplink"], true);
         assert_eq!(value["stats"]["existing"], true);

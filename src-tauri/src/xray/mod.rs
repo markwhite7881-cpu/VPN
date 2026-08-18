@@ -4,19 +4,39 @@ pub mod inbound;
 pub mod routing;
 pub mod stats;
 
+use std::fmt;
+
 use serde_json::Value;
 
 use crate::{config::RoutingOptions, error::AppResult};
 
 pub use routing::{RoutingApplicability, UnavailableReason, UnavailableRule};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct PreparedXrayConfig {
     pub value: Value,
     pub proxy_host: String,
     pub proxy_port: u16,
     pub applicability: RoutingApplicability,
     pub(crate) stats: stats::XrayStatsSpec,
+}
+
+impl fmt::Debug for PreparedXrayConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedXrayConfig")
+            .field("has_runtime_config", &true)
+            .field("has_proxy", &true)
+            .field(
+                "applied_rule_count",
+                &self.applicability.applied_rule_ids.len(),
+            )
+            .field(
+                "unavailable_rule_count",
+                &self.applicability.unavailable.len(),
+            )
+            .finish()
+    }
 }
 
 /// Clone and prepare a provider config only for the running Xray process.
@@ -81,5 +101,45 @@ mod tests {
         let rendered = format!("{:?}", prepared.applicability);
         assert!(!rendered.contains("secret-uuid"));
         assert!(!rendered.contains("vnext"));
+    }
+
+    #[test]
+    fn prepared_config_debug_redacts_runtime_config_and_connection_details() {
+        let prepared = prepare_xray_runtime_config(
+            json!({
+                "inbounds": [{
+                    "tag": "sensitive-traffic-tag",
+                    "listen": "127.0.0.1",
+                    "port": 10809,
+                    "protocol": "http"
+                }],
+                "api": {
+                    "tag": "provider-api",
+                    "listen": "127.0.0.1:9000",
+                    "services": ["HandlerService"]
+                },
+                "outbounds": [{
+                    "tag": "proxy",
+                    "protocol": "vless",
+                    "settings": {"providerSecret": "synthetic-provider-secret"}
+                }]
+            }),
+            &RoutingOptions::default(),
+            || Ok(29001),
+        )
+        .unwrap();
+
+        let rendered = format!("{prepared:?}");
+        for secret_or_connection_detail in [
+            "synthetic-provider-secret",
+            "127.0.0.1:9000",
+            "127.0.0.1:29001",
+            "10809",
+            "sensitive-traffic-tag",
+            "provider-api",
+            "HandlerService",
+        ] {
+            assert!(!rendered.contains(secret_or_connection_detail));
+        }
     }
 }
