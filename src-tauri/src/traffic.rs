@@ -34,6 +34,53 @@ impl TrafficSample {
     pub const EVENT: &'static str = "traffic";
 }
 
+/// Converts cumulative traffic counters into rate samples.
+#[derive(Default)]
+pub(crate) struct CounterSampler {
+    last_up: u64,
+    last_down: u64,
+    last_at: Option<Instant>,
+}
+
+impl CounterSampler {
+    pub(crate) fn sample_at(
+        &mut self,
+        up_total: u64,
+        down_total: u64,
+        at: Instant,
+        ts_ms: i64,
+    ) -> TrafficSample {
+        let (up_bps, down_bps) = self
+            .last_at
+            .map(|last_at| {
+                let elapsed = if at >= last_at {
+                    at.duration_since(last_at)
+                } else {
+                    Duration::ZERO
+                }
+                .as_secs_f64()
+                .max(0.001);
+                (
+                    (up_total.saturating_sub(self.last_up) as f64 / elapsed) as u64,
+                    (down_total.saturating_sub(self.last_down) as f64 / elapsed) as u64,
+                )
+            })
+            .unwrap_or((0, 0));
+
+        self.last_up = up_total;
+        self.last_down = down_total;
+        self.last_at = Some(at);
+
+        TrafficSample {
+            up_bps,
+            down_bps,
+            up_total,
+            down_total,
+            ts_ms,
+        }
+    }
+}
+
 /// Owns at most one WS connection at a time. Calling `start` while
 /// already running replaces the previous connection.
 pub struct TrafficStream {
@@ -73,9 +120,7 @@ impl TrafficStream {
         // its own when the socket drops).
         let app_for_task = app.clone();
         let handle = tokio::spawn(async move {
-            let mut last_up: u64 = 0;
-            let mut last_down: u64 = 0;
-            let mut last_at: Option<Instant> = None;
+            let mut sampler = CounterSampler::default();
             let mut backoff = Duration::from_millis(500);
 
             loop {
@@ -121,8 +166,7 @@ impl TrafficStream {
                     };
 
                     if let Message::Text(text) = msg {
-                        match parse_traffic_frame(&text, &mut last_up, &mut last_down, &mut last_at)
-                        {
+                        match parse_traffic_frame(&text, &mut sampler) {
                             Ok(sample) => {
                                 if let Err(e) = app_for_task.emit(TrafficSample::EVENT, sample) {
                                     log::warn!("traffic emit failed: {e}");
@@ -164,50 +208,60 @@ fn http_to_ws(base_url: &str) -> String {
     }
 }
 
-fn parse_traffic_frame(
-    text: &str,
-    last_up: &mut u64,
-    last_down: &mut u64,
-    last_at: &mut Option<Instant>,
-) -> AppResult<TrafficSample> {
+fn parse_traffic_frame(text: &str, sampler: &mut CounterSampler) -> AppResult<TrafficSample> {
     // sing-box sends: {"up": <cumulative bytes>, "down": <cumulative bytes>}
     // It can also occasionally send a heartbeat text frame, which we
     // treat as `up=0, down=0` so the chart keeps a flat line.
     let v: serde_json::Value = serde_json::from_str(text).map_err(AppError::Serde)?;
     let up = v.get("up").and_then(|n| n.as_u64()).unwrap_or(0);
     let down = v.get("down").and_then(|n| n.as_u64()).unwrap_or(0);
-    let now = Instant::now();
-    let up_bps = if let Some(prev_t) = last_at {
-        let dt = now.duration_since(*prev_t).as_secs_f64().max(0.001);
-        // Counter can wrap (e.g. on u64 overflow). Treat any decrease as 0.
-        let delta = up.saturating_sub(*last_up);
-        (delta as f64 / dt) as u64
-    } else {
-        0
-    };
-    let down_bps = if let Some(prev_t) = last_at {
-        let dt = now.duration_since(*prev_t).as_secs_f64().max(0.001);
-        let delta = down.saturating_sub(*last_down);
-        (delta as f64 / dt) as u64
-    } else {
-        0
-    };
-    *last_up = up;
-    *last_down = down;
-    *last_at = Some(now);
-    let ts_ms = chrono::Utc::now().timestamp_millis();
-    Ok(TrafficSample {
-        up_bps,
-        down_bps,
-        up_total: up,
-        down_total: down,
-        ts_ms,
-    })
+    Ok(sampler.sample_at(
+        up,
+        down,
+        Instant::now(),
+        chrono::Utc::now().timestamp_millis(),
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_sample_has_zero_rate_and_preserves_totals() {
+        let start = Instant::now();
+        let sample = CounterSampler::default().sample_at(1024, 2048, start, 123);
+
+        assert_eq!(sample.up_bps, 0);
+        assert_eq!(sample.down_bps, 0);
+        assert_eq!(sample.up_total, 1024);
+        assert_eq!(sample.down_total, 2048);
+        assert_eq!(sample.ts_ms, 123);
+    }
+
+    #[test]
+    fn second_sample_uses_elapsed_time_for_rates() {
+        let start = Instant::now();
+        let mut sampler = CounterSampler::default();
+        let _ = sampler.sample_at(100, 200, start, 123);
+        let sample = sampler.sample_at(1_100, 2_200, start + Duration::from_secs(2), 124);
+
+        assert_eq!(sample.up_bps, 500);
+        assert_eq!(sample.down_bps, 1_000);
+    }
+
+    #[test]
+    fn counter_decrease_is_treated_as_reset() {
+        let start = Instant::now();
+        let mut sampler = CounterSampler::default();
+        let _ = sampler.sample_at(1_000, 2_000, start, 123);
+        let sample = sampler.sample_at(100, 200, start + Duration::from_secs(1), 124);
+
+        assert_eq!(sample.up_bps, 0);
+        assert_eq!(sample.down_bps, 0);
+        assert_eq!(sample.up_total, 100);
+        assert_eq!(sample.down_total, 200);
+    }
 
     #[test]
     fn http_to_ws_handles_both_schemes() {
@@ -223,27 +277,21 @@ mod tests {
 
     #[test]
     fn parse_first_frame_has_zero_rate() {
-        let mut up = 0;
-        let mut down = 0;
-        let mut at: Option<Instant> = None;
-        let s =
-            parse_traffic_frame(r#"{"up":1024,"down":2048}"#, &mut up, &mut down, &mut at).unwrap();
+        let mut sampler = CounterSampler::default();
+        let s = parse_traffic_frame(r#"{"up":1024,"down":2048}"#, &mut sampler).unwrap();
         assert_eq!(s.up_bps, 0);
         assert_eq!(s.down_bps, 0);
         assert_eq!(s.up_total, 1024);
         assert_eq!(s.down_total, 2048);
-        assert!(at.is_some());
+        assert!(sampler.last_at.is_some());
     }
 
     #[test]
     fn parse_second_frame_computes_rate() {
-        let mut up = 0;
-        let mut down = 0;
-        let mut at: Option<Instant> = None;
-        let _ = parse_traffic_frame(r#"{"up":0,"down":0}"#, &mut up, &mut down, &mut at);
+        let mut sampler = CounterSampler::default();
+        let _ = parse_traffic_frame(r#"{"up":0,"down":0}"#, &mut sampler);
         std::thread::sleep(Duration::from_millis(1100));
-        let s =
-            parse_traffic_frame(r#"{"up":1500,"down":6000}"#, &mut up, &mut down, &mut at).unwrap();
+        let s = parse_traffic_frame(r#"{"up":1500,"down":6000}"#, &mut sampler).unwrap();
         // ~1.1s elapsed, 1500 bytes up → ~1300 B/s
         assert!(s.up_bps > 800 && s.up_bps < 2000, "got {}", s.up_bps);
         assert!(s.down_bps > 4000 && s.down_bps < 7000, "got {}", s.down_bps);
@@ -252,10 +300,8 @@ mod tests {
 
     #[test]
     fn parse_heartbeat_is_zero() {
-        let mut up = 0;
-        let mut down = 0;
-        let mut at: Option<Instant> = None;
-        let s = parse_traffic_frame("{}", &mut up, &mut down, &mut at).unwrap();
+        let mut sampler = CounterSampler::default();
+        let s = parse_traffic_frame("{}", &mut sampler).unwrap();
         assert_eq!(s.up_bps, 0);
         assert_eq!(s.down_bps, 0);
     }

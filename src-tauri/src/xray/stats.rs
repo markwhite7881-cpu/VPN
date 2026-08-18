@@ -1,11 +1,16 @@
 use std::{
     fmt,
     net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
 };
 
 use serde_json::{json, Map, Value};
+use tauri::{AppHandle, Emitter};
+use tokio::sync::Mutex;
 
 use crate::error::{AppError, AppResult};
+use crate::traffic::{CounterSampler, TrafficSample};
 
 pub(crate) mod grpc {
     tonic::include_proto!("xray.app.stats.command");
@@ -32,6 +37,159 @@ impl XrayStatsSpec {
     pub(crate) fn downlink_counter_name(&self) -> String {
         counter_name(&self.traffic_tag, "downlink")
     }
+}
+
+/// Owns one private Xray StatsService polling task at a time.
+pub(crate) struct XrayStatsStream {
+    handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    cancel: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl Default for XrayStatsStream {
+    fn default() -> Self {
+        Self {
+            handle: Mutex::new(None),
+            cancel: Mutex::new(None),
+        }
+    }
+}
+
+impl XrayStatsStream {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) async fn start(
+        self: &Arc<Self>,
+        app: AppHandle,
+        spec: XrayStatsSpec,
+    ) -> AppResult<()> {
+        self.stop().await;
+
+        let Some(endpoint) = loopback_endpoint(&spec) else {
+            log::warn!("Xray traffic stats unavailable");
+            return Ok(());
+        };
+        let uplink_counter = spec.uplink_counter_name();
+        let downlink_counter = spec.downlink_counter_name();
+        let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let app_for_task = app.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut sampler = CounterSampler::default();
+            let mut backoff = Duration::from_millis(500);
+
+            loop {
+                let mut client =
+                    match grpc::stats_service_client::StatsServiceClient::connect(endpoint.clone())
+                        .await
+                    {
+                        Ok(client) => client,
+                        Err(_) => {
+                            log::warn!("Xray traffic stats unavailable; retrying");
+                            if !wait_or_cancel(&mut cancel_rx, backoff).await {
+                                return;
+                            }
+                            backoff = (backoff * 2).min(Duration::from_secs(15));
+                            continue;
+                        }
+                    };
+
+                loop {
+                    let counters = tokio::select! {
+                        _ = &mut cancel_rx => return,
+                        result = poll_counters(&mut client, &uplink_counter, &downlink_counter) => result,
+                    };
+
+                    match counters {
+                        Ok(Some((up_total, down_total))) => {
+                            let sample = sampler.sample_at(
+                                up_total,
+                                down_total,
+                                tokio::time::Instant::now(),
+                                chrono::Utc::now().timestamp_millis(),
+                            );
+                            if app_for_task.emit(TrafficSample::EVENT, sample).is_err() {
+                                log::warn!("Xray traffic sample emit failed");
+                            }
+                            backoff = Duration::from_millis(500);
+                        }
+                        Ok(None) => {}
+                        Err(()) => {
+                            log::warn!("Xray traffic stats unavailable; retrying");
+                            break;
+                        }
+                    }
+
+                    if !wait_or_cancel(&mut cancel_rx, Duration::from_secs(1)).await {
+                        return;
+                    }
+                }
+
+                if !wait_or_cancel(&mut cancel_rx, backoff).await {
+                    return;
+                }
+                backoff = (backoff * 2).min(Duration::from_secs(15));
+            }
+        });
+
+        *self.handle.lock().await = Some(handle);
+        *self.cancel.lock().await = Some(cancel_tx);
+        Ok(())
+    }
+
+    pub(crate) async fn stop(&self) {
+        if let Some(tx) = self.cancel.lock().await.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.lock().await.take() {
+            handle.abort();
+        }
+    }
+}
+
+fn loopback_endpoint(spec: &XrayStatsSpec) -> Option<String> {
+    let host = spec.api_host.parse::<IpAddr>().ok()?;
+    host.is_loopback()
+        .then(|| format!("http://{}:{}", spec.api_host, spec.api_port))
+}
+
+async fn wait_or_cancel(
+    cancel_rx: &mut tokio::sync::oneshot::Receiver<()>,
+    duration: Duration,
+) -> bool {
+    tokio::select! {
+        _ = cancel_rx => false,
+        _ = tokio::time::sleep(duration) => true,
+    }
+}
+
+async fn poll_counters(
+    client: &mut grpc::stats_service_client::StatsServiceClient<tonic::transport::Channel>,
+    uplink_counter: &str,
+    downlink_counter: &str,
+) -> Result<Option<(u64, u64)>, ()> {
+    let uplink = client
+        .get_stats(grpc::GetStatsRequest {
+            name: uplink_counter.into(),
+            reset: false,
+        })
+        .await
+        .map_err(|_| ())?;
+    let downlink = client
+        .get_stats(grpc::GetStatsRequest {
+            name: downlink_counter.into(),
+            reset: false,
+        })
+        .await
+        .map_err(|_| ())?;
+
+    Ok(extract_counter_value(&uplink.into_inner())
+        .zip(extract_counter_value(&downlink.into_inner())))
+}
+
+fn extract_counter_value(response: &grpc::GetStatsResponse) -> Option<u64> {
+    response.stat.as_ref()?.value.try_into().ok()
 }
 
 pub(crate) fn merge_stats_config<F>(
@@ -138,7 +296,24 @@ fn counter_name(traffic_tag: &str, direction: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::merge_stats_config;
+    use super::{extract_counter_value, grpc, merge_stats_config};
+
+    #[test]
+    fn malformed_or_missing_stat_is_reported_without_panicking() {
+        assert_eq!(
+            extract_counter_value(&grpc::GetStatsResponse { stat: None }),
+            None
+        );
+        assert_eq!(
+            extract_counter_value(&grpc::GetStatsResponse {
+                stat: Some(grpc::Stat {
+                    name: "ignored".into(),
+                    value: -1,
+                }),
+            }),
+            None
+        );
+    }
 
     #[test]
     fn merge_adds_loopback_stats_api_and_inbound_counters() {
