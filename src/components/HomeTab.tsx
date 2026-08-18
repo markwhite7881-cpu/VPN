@@ -43,6 +43,8 @@ export interface HomeTabProps {
   activeOutbound: string | null;
   /** Safe country and latency metadata for ready Xray profiles, keyed by `${subscriptionId}:${key}`. */
   readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
+  /** Safe subscription summary names keyed by subscription ID. */
+  subscriptionNames: ReadonlyMap<string, string>;
   /** ip → country-code map, populated by the useGeoIp hook. */
   geoipByIp: Record<string, string>;
   /** sing-box version string, fetched on app start. */
@@ -66,6 +68,7 @@ export function HomeTab({
   selectedIndex,
   activeOutbound,
   readyProfileMetadata,
+  subscriptionNames,
   geoipByIp,
   currentSingboxVersion,
   onSingboxUpdated,
@@ -173,6 +176,7 @@ export function HomeTab({
             selectedIndex={selectedIndex}
             latencyByTag={latency.byTag}
             readyProfileMetadata={readyProfileMetadata}
+            subscriptionNames={subscriptionNames}
             geoipByIp={geoipByIp}
             onSelect={onSelect}
           />
@@ -321,29 +325,16 @@ export function HomeTab({
               <Server className="h-3 w-3" />
               Servers ({profiles.length})
             </div>
-            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-              {profiles.map((profile, i) => {
-                const display = connectionProfileDisplay(profile, readyProfileMetadata, geoipByIp, latency.byTag);
-                return (
-                  <button
-                    key={`picker-${i}-${display.key}`}
-                    onClick={() => onSelect(i)}
-                    className={cn(
-                      "flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors",
-                      i === selectedIndex
-                        ? "border-foreground/30 bg-foreground/5"
-                        : "border-border bg-card/30 hover:bg-accent",
-                    )}
-                  >
-                    <FlagIcon code={display.code} size={14} className="shrink-0 self-center" />
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {display.label}
-                    </span>
-                    <LatencyBadge ms={display.ms} />
-                  </button>
-                );
-              })}
-            </div>
+            <GroupedHomeProfileRows
+            profiles={profiles}
+            selectedIndex={selectedIndex}
+            readyProfileMetadata={readyProfileMetadata}
+            subscriptionNames={subscriptionNames}
+            geoipByIp={geoipByIp}
+            latencyByTag={latency.byTag}
+            onSelect={onSelect}
+            mode="grid"
+          />
           </CardContent>
         </Card>
       )}
@@ -371,6 +362,47 @@ export function powerButtonClasses(statusLabel: Status): string {
 function connectionProfileLabel(profile: ConnectionProfile): string {
   if (profile.kind === "manual") return profileLabel(profile.outbound);
   return profile.kind === "subscription" ? profile.label : profile.name;
+}
+
+export type IndexedHomeProfile = { index: number; profile: ConnectionProfile };
+export type HomeSubscriptionGroup = { id: string; rows: IndexedHomeProfile[] };
+export type GroupedHomeProfiles = {
+  manual: IndexedHomeProfile[];
+  subscriptions: HomeSubscriptionGroup[];
+};
+
+export function subscriptionGroupLabel(
+  subscriptionId: string,
+  subscriptionNames: ReadonlyMap<string, string>,
+): string {
+  const name = subscriptionNames.get(subscriptionId)?.trim();
+  return name || "Subscription";
+}
+
+export function groupHomeProfiles(profiles: ConnectionProfile[]): GroupedHomeProfiles {
+  const manual: IndexedHomeProfile[] = [];
+  const subscriptions: HomeSubscriptionGroup[] = [];
+  const byId = new Map<string, HomeSubscriptionGroup>();
+
+  profiles.forEach((profile, index) => {
+    if (profile.kind === "manual") {
+      manual.push({ index, profile });
+      return;
+    }
+
+    const id = profile.kind === "subscription"
+      ? profile.reference.subscription_id
+      : profile.subscriptionId;
+    let group = byId.get(id);
+    if (!group) {
+      group = { id, rows: [] };
+      byId.set(id, group);
+      subscriptions.push(group);
+    }
+    group.rows.push({ index, profile });
+  });
+
+  return { manual, subscriptions };
 }
 
 export function connectionProfileDisplay(
@@ -419,6 +451,148 @@ export function connectionProfileDisplay(
   };
 }
 
+function ProfileChoice({
+  row,
+  selectedIndex,
+  readyProfileMetadata,
+  geoipByIp,
+  latencyByTag,
+  onSelect,
+  onSelectionDone,
+  compact,
+}: {
+  row: IndexedHomeProfile;
+  selectedIndex: number;
+  readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
+  geoipByIp: Record<string, string>;
+  latencyByTag: Map<string, number>;
+  onSelect: (index: number) => void;
+  onSelectionDone?: () => void;
+  compact: boolean;
+}) {
+  const display = connectionProfileDisplay(row.profile, readyProfileMetadata, geoipByIp, latencyByTag);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onSelect(row.index);
+        onSelectionDone?.();
+      }}
+      className={cn(
+        "flex w-full items-center gap-2 rounded text-left text-xs transition-colors",
+        compact ? "px-2 py-1.5" : "border border-border bg-card/30 px-2 py-1.5 hover:bg-accent",
+        row.index === selectedIndex
+          ? compact ? "bg-foreground/5" : "border-foreground/30 bg-foreground/5"
+          : compact ? "hover:bg-accent" : "",
+      )}
+    >
+      <FlagIcon code={display.code} size={compact ? 16 : 14} className="shrink-0 self-center" />
+      <span className="min-w-0 flex-1 truncate font-medium">{display.label}</span>
+      {compact && <span className="font-mono text-[10px] text-muted-foreground">{display.protocol}</span>}
+      <LatencyBadge ms={display.ms} />
+    </button>
+  );
+}
+
+function GroupedHomeProfileRows({
+  profiles,
+  selectedIndex,
+  readyProfileMetadata,
+  subscriptionNames,
+  geoipByIp,
+  latencyByTag,
+  onSelect,
+  onSelectionDone,
+  mode,
+}: {
+  profiles: ConnectionProfile[];
+  selectedIndex: number;
+  readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
+  subscriptionNames: ReadonlyMap<string, string>;
+  geoipByIp: Record<string, string>;
+  latencyByTag: Map<string, number>;
+  onSelect: (index: number) => void;
+  onSelectionDone?: () => void;
+  mode: "picker" | "grid";
+}) {
+  const grouped = groupHomeProfiles(profiles);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const selected = profiles[selectedIndex];
+  const selectedSubscriptionId = selected?.kind === "subscription"
+    ? selected.reference.subscription_id
+    : selected?.kind === "ready_config"
+      ? selected.subscriptionId
+      : null;
+
+  useEffect(() => {
+    if (selectedSubscriptionId) {
+      setExpanded((current) => current.has(selectedSubscriptionId) ? current : new Set([selectedSubscriptionId, ...current]));
+    }
+  }, [selectedSubscriptionId]);
+
+  const renderRows = (rows: IndexedHomeProfile[]) => rows.map((row) => (
+    <li key={`${row.index}-${connectionProfileDisplay(row.profile, readyProfileMetadata, geoipByIp, latencyByTag).key}`}>
+      <ProfileChoice
+        row={row}
+        selectedIndex={selectedIndex}
+        readyProfileMetadata={readyProfileMetadata}
+        geoipByIp={geoipByIp}
+        latencyByTag={latencyByTag}
+        onSelect={onSelect}
+        onSelectionDone={onSelectionDone}
+        compact={mode === "picker"}
+      />
+    </li>
+  ));
+
+  const content = (
+    <>
+      {grouped.manual.length > 0 && (
+        <li>
+          <div className="px-2 pb-1 pt-1 text-[10px] uppercase tracking-wider text-muted-foreground">Manual servers</div>
+          {mode === "grid" ? (
+            <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+              {grouped.manual.map((row) => (
+                <ProfileChoice key={row.index} row={row} selectedIndex={selectedIndex} readyProfileMetadata={readyProfileMetadata} geoipByIp={geoipByIp} latencyByTag={latencyByTag} onSelect={onSelect} onSelectionDone={onSelectionDone} compact={false} />
+              ))}
+            </div>
+          ) : <ul>{renderRows(grouped.manual)}</ul>}
+        </li>
+      )}
+      {grouped.subscriptions.map((group) => {
+        const isExpanded = expanded.has(group.id);
+        return (
+          <li key={group.id}>
+            <button
+              type="button"
+              onClick={() => setExpanded((current) => {
+                const next = new Set(current);
+                if (next.has(group.id)) next.delete(group.id); else next.add(group.id);
+                return next;
+              })}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-muted-foreground hover:bg-accent"
+              aria-expanded={isExpanded}
+            >
+              <ChevronDown className={cn("h-3 w-3 transition-transform", !isExpanded && "-rotate-90")} />
+              <span className="min-w-0 flex-1 truncate">{subscriptionGroupLabel(group.id, subscriptionNames)}</span>
+              <span className="font-mono normal-case">{group.rows.length}</span>
+            </button>
+            {isExpanded && (mode === "grid" ? (
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                {group.rows.map((row) => (
+                  <ProfileChoice key={row.index} row={row} selectedIndex={selectedIndex} readyProfileMetadata={readyProfileMetadata} geoipByIp={geoipByIp} latencyByTag={latencyByTag} onSelect={onSelect} onSelectionDone={onSelectionDone} compact={false} />
+                ))}
+              </div>
+            ) : <ul>{renderRows(group.rows)}</ul>)}
+          </li>
+        );
+      })}
+    </>
+  );
+
+  return mode === "grid" ? <div className="space-y-2">{content}</div> : content;
+}
+
 /**
  * Compact dropdown-style server picker rendered above the hero icon.
  * Click → menu with the full list; click outside → closes.
@@ -428,6 +602,7 @@ function ServerPicker({
   selectedIndex,
   latencyByTag,
   readyProfileMetadata,
+  subscriptionNames,
   geoipByIp,
   onSelect,
 }: {
@@ -435,6 +610,7 @@ function ServerPicker({
   selectedIndex: number;
   latencyByTag: Map<string, number>;
   readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
+  subscriptionNames: ReadonlyMap<string, string>;
   geoipByIp: Record<string, string>;
   onSelect: (i: number) => void;
 }) {
@@ -471,7 +647,7 @@ function ServerPicker({
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((value) => !value)}
         disabled={profiles.length === 0}
         className={cn(
           "flex items-center gap-2 rounded-full border border-border bg-card/60 px-3 py-1.5 text-xs",
@@ -527,33 +703,17 @@ function ServerPicker({
                 </span>
               </button>
             </li>
-            {profiles.map((profile, i) => {
-              const display = connectionProfileDisplay(profile, readyProfileMetadata, geoipByIp, latencyByTag);
-              return (
-                <li key={`pick-${i}-${display.key}`}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSelect(i);
-                      setOpen(false);
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs",
-                      i === selectedIndex ? "bg-foreground/5" : "hover:bg-accent",
-                    )}
-                  >
-                    <FlagIcon code={display.code} size={16} className="shrink-0" />
-                    <span className="min-w-0 flex-1 truncate font-medium">
-                      {display.label}
-                    </span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {display.protocol}
-                    </span>
-                    <LatencyBadge ms={display.ms} />
-                  </button>
-                </li>
-              );
-            })}
+            <GroupedHomeProfileRows
+              profiles={profiles}
+              selectedIndex={selectedIndex}
+              readyProfileMetadata={readyProfileMetadata}
+              subscriptionNames={subscriptionNames}
+              geoipByIp={geoipByIp}
+              latencyByTag={latencyByTag}
+              onSelect={onSelect}
+              onSelectionDone={() => setOpen(false)}
+              mode="picker"
+            />
           </ul>
         </div>
       )}

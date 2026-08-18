@@ -350,6 +350,12 @@ export default function App() {
   // Subscriptions.
   const subs = useSubscriptions();
 
+  // Subscription display names are safe summaries; Home uses this map only for group labels.
+  const subscriptionNames = useMemo(
+    () => new Map(subs.subs.map((subscription) => [subscription.id, subscription.name])),
+    [subs.subs],
+  );
+
   // Persist tab selection across sessions.
   useEffect(() => {
     try {
@@ -835,6 +841,7 @@ export default function App() {
             selectedIndex={selectedIndex}
             activeOutbound={activeOutbound}
             readyProfileMetadata={readyProfileMetadata}
+            subscriptionNames={subscriptionNames}
             geoipByIp={geoip.byIp}
             currentSingboxVersion={version?.version ?? null}
             onSingboxUpdated={refetchSingboxVersion}
