@@ -65,7 +65,12 @@ pub fn metadata_for_config(config: &Value, probe: Option<(String, u32)>) -> Home
         .get("remarks")
         .and_then(Value::as_str)
         .and_then(infer_country_code);
-    let _endpoint_supported = extract_endpoint(config).is_some();
+    let Some(_endpoint) = extract_endpoint(config) else {
+        return HomeProfileMetadata {
+            country_code: None,
+            latency_ms: None,
+        };
+    };
     HomeProfileMetadata {
         country_code,
         latency_ms: probe.map(|(_, latency)| latency),
@@ -208,7 +213,7 @@ mod tests {
     fn unsupported_or_missing_endpoint_returns_null_metadata() {
         let metadata = metadata_for_config(
             &json!({"remarks":"unknown", "outbounds":[{"protocol":"freedom"}]}),
-            None,
+            Some(("DE".into(), 47)),
         );
         assert_eq!(
             metadata,

@@ -158,8 +158,15 @@ pub async fn get_ready_profile_metadata(
 ) -> AppResult<crate::xray::presentation::HomeProfileMetadata> {
     let profile = subscriptions
         .resolve_child_profile(&input.subscription_id, &input.child_key)
-        .await?;
-    crate::xray::presentation::resolve_profile_metadata(&profile).await
+        .await
+        .map_err(sanitize_ready_profile_metadata_error)?;
+    crate::xray::presentation::resolve_profile_metadata(&profile)
+        .await
+        .map_err(sanitize_ready_profile_metadata_error)
+}
+
+fn sanitize_ready_profile_metadata_error(_: AppError) -> AppError {
+    AppError::Subscription("ready profile metadata unavailable".into())
 }
 
 /// Resolve a stored subscription child and start it through its engine-specific lifecycle.
@@ -1221,6 +1228,34 @@ mod managed_launch_tests {
         assert!(
             matches!(unique[1], Outbound::Unsupported { ref raw, .. } if raw == "subscription-second")
         );
+    }
+}
+
+#[cfg(test)]
+mod ready_profile_metadata_tests {
+    use std::io;
+
+    use serde_json::json;
+
+    use super::sanitize_ready_profile_metadata_error;
+    use crate::error::AppError;
+
+    #[test]
+    fn ready_profile_metadata_failure_response_redacts_raw_error_details() {
+        let raw_path = r"C:\\private\\cloakwire\\profiles\\secret-config.json";
+        let error = sanitize_ready_profile_metadata_error(AppError::Io(io::Error::other(raw_path)));
+        let response = serde_json::to_value(error).expect("metadata error serializes");
+        let serialized = response.to_string();
+
+        assert_eq!(
+            response,
+            json!({
+                "kind": "subscription",
+                "message": "Subscription operation failed",
+            })
+        );
+        assert!(!serialized.contains(raw_path));
+        assert!(!serialized.contains("secret-config.json"));
     }
 }
 
