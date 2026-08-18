@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { flagForProfile } from "@/lib/flags";
 import { profileLabel, profileEndpoint, isSupported } from "@/lib/outbound";
 import { isValidProfileSelection } from "@/lib/profileSelection";
-import type { Status, StatusReport } from "@/lib/types";
+import type { HomeProfileMetadata, Status, StatusReport } from "@/lib/types";
 import type { ConnectionProfile } from "@/lib/connectionProfiles";
 
 const inTauri =
@@ -41,6 +41,8 @@ export interface HomeTabProps {
    * "auto" means the `auto` urltest is in control.
    */
   activeOutbound: string | null;
+  /** Safe country and latency metadata for ready Xray profiles, keyed by `${subscriptionId}:${key}`. */
+  readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
   /** ip → country-code map, populated by the useGeoIp hook. */
   geoipByIp: Record<string, string>;
   /** sing-box version string, fetched on app start. */
@@ -63,6 +65,7 @@ export function HomeTab({
   profiles,
   selectedIndex,
   activeOutbound,
+  readyProfileMetadata,
   geoipByIp,
   currentSingboxVersion,
   onSingboxUpdated,
@@ -100,6 +103,18 @@ export function HomeTab({
   }, [profiles.length, selectedIndex, onSelect]);
 
   const selected = profiles[selectedIndex];
+  const isXrayRunning = isRunning && status.engine === "xray";
+  const activeXrayProfile = isXrayRunning
+    ? profiles.find(
+        (profile): profile is Extract<ConnectionProfile, { kind: "ready_config" }> =>
+          profile.kind === "ready_config" &&
+          profile.engine === "xray" &&
+          profile.key === status.profile_key,
+      )
+    : undefined;
+  const activeXrayDisplay = activeXrayProfile
+    ? connectionProfileDisplay(activeXrayProfile, readyProfileMetadata, geoipByIp, latency.byTag)
+    : { flag: "🌐", code: "??", label: status.profile_name ?? "Xray", ms: undefined };
 
   // Resolve the live `activeOutbound` tag (if any) to a profile, so
   // we can show the flag + friendly name in the hero. "auto" is
@@ -157,6 +172,7 @@ export function HomeTab({
             profiles={profiles}
             selectedIndex={selectedIndex}
             latencyByTag={latency.byTag}
+            readyProfileMetadata={readyProfileMetadata}
             geoipByIp={geoipByIp}
             onSelect={onSelect}
           />
@@ -179,11 +195,7 @@ export function HomeTab({
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/40",
               "disabled:cursor-not-allowed",
               "shadow-lg",
-              isRunning
-                ? "border-foreground/40 bg-foreground/10 text-foreground hover:border-foreground/60 hover:bg-foreground/15"
-                : isTransition
-                  ? "border-foreground/20 bg-foreground/5"
-                  : "border-muted-foreground/40 bg-muted/40 text-muted-foreground hover:border-foreground/50 hover:bg-muted/60 hover:text-foreground",
+              powerButtonClasses(statusLabel),
             )}
           >
             {isTransition ? (
@@ -192,9 +204,7 @@ export function HomeTab({
               <Power
                 className={cn(
                   "h-8 w-8 transition-transform group-hover:scale-110",
-                  isRunning
-                    ? "text-foreground"
-                    : "",
+                  isRunning ? "text-success" : "",
                 )}
               />
             )}
@@ -211,18 +221,24 @@ export function HomeTab({
             </div>
             <p className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
               {isRunning
-                ? activeName && activeFlag
+                ? isXrayRunning
                   ? <>
                       <span>via</span>
-                      <FlagIcon code={activeFlag.code} size={14} className="self-center" />
-                      <span>{activeName}</span>
+                      <FlagIcon code={activeXrayDisplay.code} size={14} className="self-center" />
+                      <span>{status.profile_name ?? activeXrayDisplay.label}</span>
                     </>
-                  : "sing-box is running."
+                  : activeName && activeFlag
+                    ? <>
+                        <span>via</span>
+                        <FlagIcon code={activeFlag.code} size={14} className="self-center" />
+                        <span>{activeName}</span>
+                      </>
+                    : "sing-box is running."
                 : profiles.length === 0
                   ? "Add a server in the Servers tab to get started."
                   : "Click the power button to bring the tunnel up."}
             </p>
-            {isRunning && userPicked && (
+            {isRunning && !isXrayRunning && userPicked && (
               <p className="font-mono text-[10px] text-muted-foreground/70">
                 picked: {userPicked}
               </p>
@@ -307,7 +323,7 @@ export function HomeTab({
             </div>
             <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
               {profiles.map((profile, i) => {
-                const display = connectionProfileDisplay(profile, geoipByIp, latency.byTag);
+                const display = connectionProfileDisplay(profile, readyProfileMetadata, geoipByIp, latency.byTag);
                 return (
                   <button
                     key={`picker-${i}-${display.key}`}
@@ -342,13 +358,24 @@ export function HomeTab({
   );
 }
 
+export function powerButtonClasses(statusLabel: Status): string {
+  if (statusLabel === "running") {
+    return "border-success/40 bg-success/10 text-success shadow-success/20 hover:border-success/60 hover:bg-success/15 focus-visible:ring-success/40";
+  }
+  if (statusLabel === "starting" || statusLabel === "stopping") {
+    return "border-foreground/20 bg-foreground/5";
+  }
+  return "border-muted-foreground/40 bg-muted/40 text-muted-foreground hover:border-foreground/50 hover:bg-muted/60 hover:text-foreground";
+}
+
 function connectionProfileLabel(profile: ConnectionProfile): string {
   if (profile.kind === "manual") return profileLabel(profile.outbound);
   return profile.kind === "subscription" ? profile.label : profile.name;
 }
 
-function connectionProfileDisplay(
+export function connectionProfileDisplay(
   profile: ConnectionProfile,
+  readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>,
   geoipByIp: Record<string, string>,
   latencyByTag: Map<string, number>,
 ): { flag: string; code: string; label: string; protocol: string; ms: number | undefined; key: string } {
@@ -363,12 +390,16 @@ function connectionProfileDisplay(
     };
   }
   if (profile.kind === "ready_config") {
+    const metadata = profile.engine === "xray"
+      ? readyProfileMetadata.get(`${profile.subscriptionId}:${profile.key}`)
+      : undefined;
+    const code = metadata?.country_code ?? "??";
     return {
-      flag: "🌐",
-      code: "??",
+      flag: code === "??" ? "🌐" : code,
+      code,
       label: profile.name,
       protocol: profile.engine === "singbox" ? "sing-box" : "Xray",
-      ms: undefined,
+      ms: metadata?.latency_ms ?? undefined,
       key: `${profile.subscriptionId}-${profile.key}`,
     };
   }
@@ -396,12 +427,14 @@ function ServerPicker({
   profiles,
   selectedIndex,
   latencyByTag,
+  readyProfileMetadata,
   geoipByIp,
   onSelect,
 }: {
   profiles: ConnectionProfile[];
   selectedIndex: number;
   latencyByTag: Map<string, number>;
+  readyProfileMetadata: ReadonlyMap<string, HomeProfileMetadata>;
   geoipByIp: Record<string, string>;
   onSelect: (i: number) => void;
 }) {
@@ -428,7 +461,7 @@ function ServerPicker({
 
   const selected = profiles[selectedIndex];
   const selectedDisplay = selected
-    ? connectionProfileDisplay(selected, geoipByIp, latencyByTag)
+    ? connectionProfileDisplay(selected, readyProfileMetadata, geoipByIp, latencyByTag)
     : null;
   const selectedFlag = selectedDisplay ?? { flag: "🌐", code: "??", label: "No servers", ms: undefined, key: "none", protocol: "" };
   const selectedName = selectedDisplay?.label ?? "No servers";
@@ -495,7 +528,7 @@ function ServerPicker({
               </button>
             </li>
             {profiles.map((profile, i) => {
-              const display = connectionProfileDisplay(profile, geoipByIp, latencyByTag);
+              const display = connectionProfileDisplay(profile, readyProfileMetadata, geoipByIp, latencyByTag);
               return (
                 <li key={`pick-${i}-${display.key}`}>
                   <button

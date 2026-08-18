@@ -29,6 +29,7 @@ import {
 } from "@/lib/connectionProfiles";
 import { useSubscriptions } from "@/hooks/useSubscriptions";
 import { useGeoIp } from "@/hooks/useGeoIp";
+import { useReadyProfileMetadata } from "@/hooks/useReadyProfileMetadata";
 import { isSupported } from "@/lib/outbound";
 import { basename } from "@/lib/utils";
 import type {
@@ -363,6 +364,7 @@ export default function App() {
     () => buildConnectionProfiles(manualProfiles, subs.snapshot),
     [manualProfiles, subs.snapshot],
   );
+  const readyProfileMetadata = useReadyProfileMetadata(profiles);
 
   // Online GeoIP fallback for servers the cheap heuristic in
   // `flagForProfile` couldn't resolve (no emoji, no Russian/English
@@ -831,6 +833,7 @@ export default function App() {
             profiles={profiles}
             selectedIndex={selectedIndex}
             activeOutbound={activeOutbound}
+            readyProfileMetadata={readyProfileMetadata}
             geoipByIp={geoip.byIp}
             currentSingboxVersion={version?.version ?? null}
             onSingboxUpdated={refetchSingboxVersion}
@@ -921,6 +924,7 @@ export default function App() {
       manualProfiles,
       profiles,
       selectedIndex,
+      readyProfileMetadata,
       onStart,
       onStop,
       onSelectProfile,
