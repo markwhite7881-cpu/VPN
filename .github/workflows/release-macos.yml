@@ -20,9 +20,17 @@ jobs:
           - target: aarch64-apple-darwin
             goarch: arm64
             label: aarch64
+            xray_archive: Xray-macos-arm64-v8a.zip
+            xray_archive_sha256: 2e93a67e8aa1936ecefb307e120830fcbd4c643ab9b1c46a2d0838d5f8409eaf
+            xray_executable_sha256: 5d9dd24c0aba4b6cfcc6a33a5d67f854816ee17f392bf932ec8176da46f7e404
+            xray_executable_size: 33678802
           - target: x86_64-apple-darwin
             goarch: amd64
             label: x64
+            xray_archive: Xray-macos-64.zip
+            xray_archive_sha256: f5b0471d3459eff1b82e48af0aeac186abcc3298210070afbbbd8437a4e8b203
+            xray_executable_sha256: afd0eabebb7994a18f29b00c5f50a4f7fbb77da06e24352d43035f3cad3c3786
+            xray_executable_size: 35723312
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.2
 
@@ -56,6 +64,21 @@ jobs:
             ./cmd/sing-box
           chmod +x "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.target }}"
           "$GITHUB_WORKSPACE/src-tauri/binaries/sing-box-${{ matrix.target }}" version
+
+      - name: Prepare verified Xray sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url='https://github.com/XTLS/Xray-core/releases/download/v26.3.27'
+          archive="${RUNNER_TEMP}/${{ matrix.xray_archive }}"
+          curl --fail --location --retry 3 --output "$archive" "$base_url/${{ matrix.xray_archive }}"
+          echo '${{ matrix.xray_archive_sha256 }}  '"$archive" | shasum -a 256 -c -
+          sidecar="$GITHUB_WORKSPACE/src-tauri/binaries/xray-${{ matrix.target }}"
+          unzip -p "$archive" xray > "$sidecar"
+          chmod +x "$sidecar"
+          [ "$(stat -f%z "$sidecar")" = '${{ matrix.xray_executable_size }}' ]
+          echo '${{ matrix.xray_executable_sha256 }}  '"$sidecar" | shasum -a 256 -c -
+          "$sidecar" version
 
       - name: Install JavaScript dependencies
         run: npm ci
