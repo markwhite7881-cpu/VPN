@@ -326,6 +326,7 @@ export default function App() {
   const [settings, setSettings] = useState<GeneratorSettings>(loadSettings);
   const [reconnectRequired, setReconnectRequired] = useState(false);
   const [reconnectFailed, setReconnectFailed] = useState(false);
+  const [reconnectInProgress, setReconnectInProgress] = useState(false);
   const handleSettingsChange = useCallback(
     (next: GeneratorSettings): void => {
       setSettings(next);
@@ -617,6 +618,7 @@ export default function App() {
 
   const reconnectCurrentProfile = useCallback(async (): Promise<boolean> => {
     if (!inTauri) return false;
+    setReconnectInProgress(true);
     setBusy(true);
     setError(null);
     try {
@@ -644,6 +646,7 @@ export default function App() {
       return false;
     } finally {
       setBusy(false);
+      setReconnectInProgress(false);
     }
   }, []);
 
@@ -1034,7 +1037,8 @@ export default function App() {
         </div>
       </header>
 
-      {((reconnectRequired && status.status === "running") ||
+      {(reconnectInProgress ||
+        (reconnectRequired && status.status === "running") ||
         (reconnectFailed &&
           (status.status === "stopped" || status.status === "crashed"))) && (
         <div
