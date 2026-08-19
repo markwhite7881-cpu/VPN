@@ -33,7 +33,7 @@ import { useReadyProfileMetadata } from "@/hooks/useReadyProfileMetadata";
 import { isSupported } from "@/lib/outbound";
 import { basename } from "@/lib/utils";
 import { shouldFrontendApplySystemProxy } from "@/lib/systemProxy";
-import { nextReconnectRequired } from "@/lib/reconnectState";
+import { nextReconnectRequired, shouldShowReconnectNotice } from "@/lib/reconnectState";
 import type {
   BinaryInfo,
   CustomRule,
@@ -1037,10 +1037,12 @@ export default function App() {
         </div>
       </header>
 
-      {(reconnectInProgress ||
-        (reconnectRequired && status.status === "running") ||
-        (reconnectFailed &&
-          (status.status === "stopped" || status.status === "crashed"))) && (
+      {shouldShowReconnectNotice({
+        reconnectInProgress,
+        reconnectRequired,
+        reconnectFailed,
+        status: status.status,
+      }) && (
         <div
           role="status"
           className="relative z-10 flex items-center justify-between gap-3 border-b border-primary/20 bg-primary/5 px-6 py-2 text-xs"
