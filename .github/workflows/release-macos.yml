@@ -112,14 +112,18 @@ jobs:
           while IFS= read -r path; do apps+=("$path"); done < <(find "$app_dir" -maxdepth 1 -type d -name '*.app')
           [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::Expected exactly one DMG in $dmg_dir; found ${#dmgs[@]}"; exit 1; }
           [ "${#apps[@]}" -eq 1 ] || { echo "::error::Expected exactly one app bundle in $app_dir; found ${#apps[@]}"; exit 1; }
-          mkdir -p dist
-          cp "${dmgs[0]}" "dist/Cloakwire_${version}_${{ matrix.label }}.dmg"
-          ditto -c -k --sequesterRsrc --keepParent "${apps[0]}" "dist/Cloakwire_${version}_${{ matrix.label }}.app.zip"
-          shasum -a 256 dist/*.dmg dist/*.app.zip > dist/SHA256SUMS.txt
+          release_dir="release-artifacts"
+          mkdir -p "$release_dir"
+          cp "${dmgs[0]}" "$release_dir/Cloakwire_${version}_${{ matrix.label }}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "${apps[0]}" "$release_dir/Cloakwire_${version}_${{ matrix.label }}.app.zip"
+          (
+            cd "$release_dir"
+            shasum -a 256 *.dmg *.app.zip > SHA256SUMS.txt
+          )
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cloakwire-macos-${{ matrix.label }}
-          path: dist/
+          path: release-artifacts/
           if-no-files-found: error
           retention-days: 14
