@@ -59,6 +59,15 @@ describe("shouldShowReconnectNotice", () => {
     })).toBe(true);
   });
 
+  it("keeps retry visible after a failed reconnect crashes the server", () => {
+    expect(shouldShowReconnectNotice({
+      reconnectInProgress: false,
+      reconnectRequired: true,
+      reconnectFailed: true,
+      status: "crashed",
+    })).toBe(true);
+  });
+
   it("keeps ordinary stopped-state edits silent", () => {
     expect(shouldShowReconnectNotice({
       reconnectInProgress: false,
@@ -68,12 +77,15 @@ describe("shouldShowReconnectNotice", () => {
     })).toBe(false);
   });
 
-  it("keeps the notice visible while reconnect work is in progress", () => {
-    expect(shouldShowReconnectNotice({
-      reconnectInProgress: true,
-      reconnectRequired: false,
-      reconnectFailed: false,
-      status: "stopping",
-    })).toBe(true);
-  });
+  it.each(["starting", "stopping"] as const)(
+    "keeps the notice visible while reconnect work is in progress (%s)",
+    (status) => {
+      expect(shouldShowReconnectNotice({
+        reconnectInProgress: true,
+        reconnectRequired: false,
+        reconnectFailed: false,
+        status,
+      })).toBe(true);
+    },
+  );
 });
