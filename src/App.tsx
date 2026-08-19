@@ -325,6 +325,7 @@ export default function App() {
   // switches and a process restart (persisted to localStorage below).
   const [settings, setSettings] = useState<GeneratorSettings>(loadSettings);
   const [reconnectRequired, setReconnectRequired] = useState(false);
+  const [reconnectFailed, setReconnectFailed] = useState(false);
   const handleSettingsChange = useCallback(
     (next: GeneratorSettings): void => {
       setSettings(next);
@@ -595,6 +596,8 @@ export default function App() {
 
       await refresh();
       setActiveTab("home");
+      setReconnectRequired(false);
+      setReconnectFailed(false);
       return true;
     } catch (e) {
       setError(humanError(e));
@@ -630,9 +633,13 @@ export default function App() {
       const started = await onStartRef.current();
       if (started) {
         setReconnectRequired(false);
+        setReconnectFailed(false);
+      } else {
+        setReconnectFailed(true);
       }
       return started;
     } catch (e) {
+      setReconnectFailed(true);
       setError(humanError(e));
       return false;
     } finally {
@@ -1027,7 +1034,9 @@ export default function App() {
         </div>
       </header>
 
-      {reconnectRequired && status.status === "running" && (
+      {((reconnectRequired && status.status === "running") ||
+        (reconnectFailed &&
+          (status.status === "stopped" || status.status === "crashed"))) && (
         <div
           role="status"
           className="relative z-10 flex items-center justify-between gap-3 border-b border-primary/20 bg-primary/5 px-6 py-2 text-xs"
