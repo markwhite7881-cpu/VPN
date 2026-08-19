@@ -4,7 +4,7 @@
 
 # Cloakwire
 
-**Privacy-first GUI VPN client built on top of [sing-box](https://github.com/SagerNet/sing-box).**
+**Privacy-first desktop VPN client with sing-box as its primary core and Xray as a capability fallback.**
 
 Tauri 2 + React + TypeScript.
 
@@ -21,159 +21,131 @@ Tauri 2 + React + TypeScript.
 
 ## 🎯 Что это такое
 
-**Cloakwire** — это минималистичный GUI VPN-клиент для Windows, который оборачивает мощь [sing-box](https://github.com/SagerNet/sing-box) в понятный интерфейс. Полный стек протоколов (VLESS, VMess, Trojan, Shadowsocks, Hysteria2, TUIC), авто-обновления и sing-box core в одном приложении.
+**Cloakwire** — минималистичный desktop VPN-клиент для Windows, macOS и Linux. Он принимает share-links и подписки, сохраняет конфигурации локально и запускает профиль в понятном интерфейсе без ручного редактирования JSON.
+
+**sing-box — основной движок.** Он используется для обычных поддерживаемых профилей, TUN, System Proxy, маршрутизации по приложениям, выбора прокси и встроенных проверок задержки.
+
+**Xray — резервный движок по возможностям.** Если подписка содержит профиль, который безопаснее или корректнее исполнять через Xray, Cloakwire подготавливает и запускает его автоматически. При этом Home сохраняет статус, выбранный сервер и live-метрики. Управление proxy-группами и встроенные delay-тесты доступны только при активном sing-box — это ограничение намеренное, а не ошибка интерфейса.
 
 ### Управляйте маршрутом, а не настройками сети
 
-Cloakwire создаёт защищённый маршрут именно так, как нужно вам — без ручных правил маршрутизации и редактирования конфигов.
+**Apps via VPN.** Выберите браузер, игру, мессенджер или другое приложение — только их соединения пойдут через VPN-туннель. Остальной трафик продолжит работать напрямую.
 
-**Режим «Apps via VPN».** Выберите браузер, игру, мессенджер или другое приложение — только их соединения пойдут через VPN-туннель. Остальной трафик продолжит работать напрямую.
-
-**Режим «Apps direct».** Можно сделать наоборот: направить через VPN весь системный трафик и оставить прямое подключение только для выбранных приложений — например, банковских клиентов, корпоративных сервисов или программ в локальной сети.
-
-Выберите режим, отметьте нужные приложения и подключитесь.
+**Apps direct.** Или наоборот: направьте через VPN системный трафик и оставьте прямое соединение только для выбранных приложений — например, банковских клиентов, корпоративных сервисов или программ в локальной сети.
 
 ---
 
-## ✨ Почему Cloakwire
+## ✨ Возможности
 
 | | |
 |---|---|
-| 🚀 **Быстрый старт** | Подписка или share-link → готово за минуту |
-| 🎯 **Per-app маршруты** | "Telegram через VPN, банк-клиент напрямую" — одной галочкой |
-| 🔄 **Авто-обновления** | И оболочка, и sing-box core обновляются сами |
-| 🛡️ **Полный sing-box** | VLESS, VMess, Trojan, SS, Hysteria2, TUIC |
-| 🪶 **Лёгкий** | 7 MB portable, минимум зависимостей |
-| 🎨 **Минималистичный UI** | Тёмная тема, один взгляд — и всё понятно |
-| 🔓 **Open Source** | MIT, без трекеров, без телеметрии |
+| 🚀 **Быстрый старт** | Share-link или подписка → профиль готов к подключению |
+| 🧩 **Два движка** | sing-box — основной; Xray — автоматический fallback для совместимых профилей |
+| 🎯 **Per-app маршруты** | «Telegram через VPN, банк напрямую» — в одном интерфейсе |
+| 🗂️ **Подписки без утечек** | Подписки разбираются в backend; URL и содержимое профилей не передаются WebView |
+| 🧭 **Понятный Home** | Серверы одной подписки сгруппированы, названия провайдера используются как fallback |
+| 🔄 **Безопасное переподключение** | При смене сервера или рабочих Config/Routing-настроек активный VPN переподключается автоматически |
+| 📈 **Live-статус** | Состояние соединения, трафик и информация о текущем движке |
+| 🔓 **Open Source** | MIT, без аналитики и телеметрии |
+
+Поддерживаемые link-протоколы включают VLESS, VMess, Trojan, Shadowsocks, Hysteria2 и TUIC. Реальная совместимость конкретного профиля определяется его параметрами и выбранным движком.
 
 ---
 
 ## 📥 Установка
 
-### Windows — скачать готовый билд (рекомендуется)
+Скачивайте файлы из **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)**. Ниже перечислен состав текущего релиза `v1.3.1`.
 
-Перейдите в **[Releases → Latest](https://github.com/markwhite7881-cpu/cloakwire/releases/latest)** и скачайте:
+### Windows x64
 
-- **`Cloakwire_1.0.x_x64-setup.exe`** (16 MB) — NSIS-установщик, рекомендуется
-- **`Cloakwire_1.0.x_x64_en-US.msi`** (27 MB) — MSI для корпоративного деплоя
-- **`Cloakwire-1.0.x-portable.exe`** (7.4 MB) — portable, без установки
+- **`Cloakwire_1.3.1_x64-setup.exe`** — NSIS-установщик.
 
-> 💡 **Совет:** Windows SmartScreen может предупредить о неподписанном издателе. Нажмите "Подробнее" → "Выполнить в любом случае" — это нормально для open source без code-signing сертификата.
+> ⚠️ Установщик `v1.3.1` не подписан Authenticode. Windows SmartScreen может показать предупреждение о неизвестном издателе. Скачивайте файл только из GitHub Releases и сверяйте SHA-256 с `SHA256SUMS.txt`.
 
-### Linux — `.deb` для Ubuntu / Debian
+### macOS
 
-> ⚠️ **Linux-порт в бете** — собирается, запускается, TUN-режим работает, но без тщательного тестирования на разных DE. Жду багрепорты.
+Выберите сборку по архитектуре процессора:
 
-Скачайте **`Cloakwire_1.0.x_amd64.deb`** (21 MB) из Releases и поставьте:
+| Mac | Файлы |
+|---|---|
+| Intel | `Cloakwire_1.3.1_x64.dmg` или `Cloakwire_1.3.1_x64.app.zip` |
+| Apple Silicon | `Cloakwire_1.3.1_aarch64.dmg` или `Cloakwire_1.3.1_aarch64.app.zip` |
+
+> ⚠️ Сборки `v1.3.1` не подписаны и не notarized. macOS может потребовать явного разрешения на запуск в настройках Privacy & Security.
+
+### Linux x64 — Ubuntu / Debian
+
+Установите пакет:
 
 ```bash
-sudo apt install ./Cloakwire_1.0.x_amd64.deb
+sudo apt install ./Cloakwire_1.3.1_amd64.deb
 cloakwire
 ```
 
-Зависимости (`libwebkit2gtk-4.1-0`, `libgtk-3-0`) уже есть на любом Ubuntu 22.04+ / Debian 12+ desktop. Postinst автоматически делает `setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box` — нужно для TUN-режима.
+Пакет устанавливает `/usr/bin/cloakwire`, `sing-box` и Xray. Его `postinst` выдаёт `sing-box` capability `cap_net_admin,cap_net_raw=+ep`, необходимую для TUN-режима:
 
-Если TUN-режим всё равно не работает (например, после `apt upgrade` потерялись capabilities):
+```bash
+getcap /usr/bin/sing-box
+# ожидается: /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
+```
+
+Если capability была сброшена обновлением или ручным изменением прав, восстановите её:
 
 ```bash
 sudo setcap cap_net_admin,cap_net_raw=+ep /usr/bin/sing-box
 ```
 
-Cloakwire сама покажет понятную ошибку с этой командой, если caps пропадут.
+Linux-сборка рассчитана на Ubuntu 22.04+ и Debian 12+ desktop. TUN рекомендуется: он перехватывает трафик на сетевом уровне и не зависит от proxy-поддержки конкретного приложения.
 
-**System Proxy** на Linux работает через `gsettings` (GNOME / MATE / Cinnamon / XFCE / Budgie / Pantheon) или `kwriteconfig5` (KDE). TUN-режим рекомендуется — он перехватывает трафик на сетевом уровне и не зависит от поддержки proxy в приложениях.
+### Проверка загрузки
 
-### Собрать из исходников
+В каждый релиз входит `SHA256SUMS.txt`. Перед установкой можно проверить файл так:
 
 ```powershell
-# Требования: Node 20+, Rust 1.77+, Tauri CLI (npm i -g @tauri-apps/cli)
-git clone https://github.com/markwhite7881-cpu/cloakwire.git
-cd cloakwire
-npm install
-npm run tauri:build
-# Артефакты: src-tauri\target\release\bundle\{msi,nsis}\
+Get-FileHash .\Cloakwire_1.3.1_x64-setup.exe -Algorithm SHA256
 ```
 
-Portable exe: `src-tauri\target\release\cloakwire.exe`
-
-### Сборка `.deb` из исходников (Linux)
-
-Tauri 2 под Linux собирает `.deb` (без встроенного postinst-хука,
-поэтому наш build-скрипт добавляет `setcap` руками через `dpkg-deb`).
-Рекомендуемый путь — WSL2 на Windows или нативная Ubuntu 22.04+.
-
-```bash
-# Одноразовая настройка (Ubuntu 22.04+ / Debian 12+):
-sudo apt install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
-                    librsvg2-dev libayatana-appindicator3-dev patchelf \
-                    build-essential file unzip xz-utils dpkg-dev
-# rustup: https://rustup.rs (stable, 1.77+)
-# Node 20+ через nvm или apt
-
-# Клонируем:
-git clone https://github.com/markwhite7881-cpu/cloakwire.git
-cd cloakwire
-npm install
-
-# Сборка .deb (npm run tauri:build → tauri-bundler → .deb,
-# затем scripts/build-linux-deb.sh round-trip через dpkg-deb
-# чтобы вложить scripts/deb-postinst.sh как DEBIAN/postinst).
-./scripts/build-linux-deb.sh 1.3.0
-
-# Артефакты:
-#   src-tauri/target/release/bundle/deb/Cloakwire_<ver>_amd64.deb
-#   dist-release/Cloakwire_<ver>_amd64.deb (зеркалится на Windows-сторону)
-
-# Установка + smoke test:
-sudo apt install -y ./dist-release/Cloakwire_<ver>_amd64.deb
-getcap /usr/bin/sing-box
-# ожидаем: /usr/bin/sing-box cap_net_admin,cap_net_raw=ep
-```
-
-Postinst идемпотентен — `apt upgrade` пере-запускает его, `setcap` молча
-no-op если caps уже стоят. Если caps когда-то пропадут (ручной `chmod`,
-`apt purge && apt install`, и т.п.), приложение само покажет понятную
-ошибку с командой восстановления.
+Сравните результат со строкой для нужного файла в `SHA256SUMS.txt`.
 
 ---
 
 ## 🚀 Первый запуск
 
-1. Запустите Cloakwire (потребуются права администратора для TUN-режима)
-2. **Servers** → вставьте share-link (`vless://...`) или subscription URL → **Add**
-3. **Routing** → добавьте программы в "Apps via VPN" (например `telegram.exe`)
-4. **Config** → убедитесь, что **Tunnel mode = TUN**
-5. **Home** → нажмите большую кнопку питания
+1. Запустите Cloakwire. Для TUN-режима могут потребоваться права администратора.
+2. В **Servers** вставьте share-link (`vless://…`) или URL подписки и нажмите **Add**.
+3. В **Routing** добавьте программы в **Apps via VPN** или **Apps direct**.
+4. В **Config** выберите режим туннеля — обычно **TUN**.
+5. На **Home** выберите сервер и нажмите большую кнопку питания.
 
-Готово. Весь трафик выбранных программ идёт через VPN, остальное — напрямую.
+Если VPN уже запущен, выбор другого сервера и изменение применимых настроек сопровождаются безопасным переподключением. Сообщение в интерфейсе остаётся видимым, пока переподключение выполняется или требуется повторная попытка.
 
 ---
 
-## 🖼️ Скриншоты
+## 🖼️ Интерфейс
 
 ### Home — главный экран
-Pикер сервера, статус sing-box, live метрики Download/Upload, задержка по всем серверам.
+
+Группы серверов подписки, выбранный профиль, статус активного движка, live Download/Upload и задержка серверов до подключения.
 
 ![Home tab](dist-release/screenshots/01-home.png)
 
-### Servers — добавление профилей
-Поддержка share-link (`vless://`, `vmess://`, `ss://`, `hy2://`, `trojan://`, `tuic://`) и подписок (URL, base64, Clash YAML). Авто-детект формата.
+### Servers — профили и подписки
+
+Поддерживаются share-links и подписки в URL, base64 и Clash YAML. Формат определяется автоматически; для безымянных подписок используется название провайдера из метаданных.
 
 ![Servers tab](dist-release/screenshots/02-servers.png)
 
 ### Config — режимы туннеля и DNS
-Четыре режима: **TUN** (system-wide, требует admin), **System Proxy** (локальный SOCKS/HTTP на `127.0.0.1:2080`), **Both** (TUN + local proxy), **None** (только outbounds для тестов). Отдельные поля для локального и удалённого DNS.
+
+Четыре режима: **TUN**, **System Proxy**, **Both** и **None**. Отдельные поля для локального и удалённого DNS.
 
 ![Config tab](dist-release/screenshots/03-config.png)
 
-### Routing — простой UX
-Два process-picker'а: **Apps via VPN** (эти программы идут через VPN) и **Apps direct** (эти всегда напрямую, обходя VPN и rule-sets). Всё остальное — в Advanced.
+### Routing — простой и расширенный режимы
+
+В простом режиме доступны **Apps via VPN** и **Apps direct**. В Advanced можно настроить custom rules, rule-sets, sniffing, auto-detect interface и final outbound.
 
 ![Routing tab — simple UX](dist-release/screenshots/04-routing.png)
-
-### Routing Advanced — полный редактор правил
-Sniff protocol, auto-detect interface, Final outbound. Custom rules (drag-and-drop, все matcher'ы sing-box). Rule-sets (Loyalsoldier / meta-rules-dat / custom URL). Starter rules в один клик (Bypass LAN, Reject IPv6, Block QUIC, Bypass CN, Bypass RU, Block Ads, Block Malware). Rule-set library с переключателем источника Loyalsoldier ↔ meta.
 
 ![Routing tab — Advanced](dist-release/screenshots/05-routing-advanced.png)
 
@@ -181,96 +153,82 @@ Sniff protocol, auto-detect interface, Final outbound. Custom rules (drag-and-dr
 
 ## 🏗️ Архитектура
 
-```
+```text
 ┌──────────────────────┐
-│  React + Tailwind    │  ← tauri::invoke для всего
-│  (src/)              │
+│ React + Tailwind     │  ← typed tauri::invoke
+│ src/                 │
 └──────────┬───────────┘
-           │ tauri::invoke  (typed commands)
+           │
 ┌──────────▼───────────┐
-│  Rust + Tauri 2      │  ← CLI/sign/process/tun/log/updater
-│  (src-tauri/src/)    │
+│ Rust + Tauri 2       │  ← subscriptions, routing, lifecycle, safe IPC
+│ src-tauri/src/       │
 └──────────┬───────────┘
-           │ std::process::Command
-┌──────────▼───────────┐
-│  sing-box            │  ← VLESS/VMess/Trojan/SS/Hy2/TUIC, TUN, route
-│  (binaries/)         │
-└──────────────────────┘
+           │ process lifecycle
+┌──────────▼───────────────────────────┐
+│ sing-box (primary)  │ Xray (fallback) │
+│ TUN / proxy control │ compatible      │
+│ Clash API / delay   │ profile runtime │
+└──────────────────────────────────────┘
 ```
 
-**Слои:**
-1. **Frontend** — React + TypeScript + Tailwind
-2. **Tauri shell** — Rust-обёртка: команды процесса, авто-обновления, логирование, TUN-управление
-3. **sing-box core** — сам VPN-протокол, конфиг генерируется из UI-структуры
+1. **Frontend** — React + TypeScript + Tailwind. Он получает только безопасные данные, нужные интерфейсу.
+2. **Tauri shell** — Rust-слой для подписок, генерации runtime-конфигураций, процесса, маршрутизации, DNS и обновлений.
+3. **VPN runtime** — sing-box используется по умолчанию; Xray запускается для классифицированных fallback-профилей. Одновременно работает только один движок.
 
 ---
 
 ## 🛠️ Стек
 
 | Слой | Технология |
-|------|------------|
+|---|---|
 | Shell | **Tauri 2** (Rust + WebView) |
 | UI | **React 18** + **TypeScript 5** |
-| Стили | **Tailwind CSS 3** + shadcn-style design tokens |
-| Ядро VPN | [**sing-box**](https://github.com/SagerNet/sing-box) 1.10+ (sidecar) |
-| Drag-and-drop | **@dnd-kit/sortable** |
-| Иконки | **lucide-react** |
-| Авто-обновления | `tauri-plugin-updater` + `tauri-plugin-process` (Ed25519 minisign) |
-| Process enum | `sysinfo` crate |
-| Подпись | Custom `tauri-signer` crate (см. ниже) |
+| Стили | **Tailwind CSS 3** + design tokens |
+| Основное VPN-ядро | [**sing-box**](https://github.com/SagerNet/sing-box) sidecar |
+| Fallback-ядро | [**Xray-core**](https://github.com/XTLS/Xray-core) sidecar |
+| Маршрутизация | sing-box rules / rule-sets + process routing |
+| Автообновление приложения | инфраструктура Tauri updater; подписанные updater-артефакты публикуются отдельно, когда доступны |
+| Обновление runtime | managed update существует для sing-box; автоматическое обновление Xray намеренно не включено |
 
 ---
 
-## 📦 Этапы разработки
+## 🔐 Безопасность и границы данных
 
-| Этап | Статус | Что сделано |
-|------|--------|-------------|
-| 1. Tauri scaffold + sidecar | ✅ | Spawn/stop, log streaming, health-check, default config |
-| 2. Парсер протоколов | ✅ | vless / vmess / trojan / ss / hy2 / tuic |
-| 3. Генератор конфига | ✅ | TUN inbound, route rules, selector/urltest, `sing-box check` clean |
-| 4. Clash API | ✅ | list/select/test_delay over HTTP |
-| 5. Список серверов + график трафика | ✅ | WebSocket traffic stream, SVG sparklines |
-| 6. Авто-обновление подписок | ✅ | Fetch + parse + per-line errors + auto-refresh tick |
-| 7. Routing + автозапуск | ✅ | Geosite/geoip presets (ads/CN/RU/QUIC) + Windows autostart |
-| 8. v1.0.0 + авто-обновление | ✅ | Tauri updater (Ed25519), sing-box core auto-update |
+- URL подписок, содержимое профилей, UUID/ключи и runtime-пути не отдаются в WebView.
+- Xray runtime-конфигурация и его stdout/stderr остаются на backend-стороне.
+- При активном Xray интерфейс не пытается вызывать sing-box Clash API для списка/выбора прокси или delay-тестов.
+- Нет продуктовой телеметрии и аналитики.
+- Обновления и загружаемые артефакты должны проверяться по SHA-256; для новых релизов используйте `SHA256SUMS.txt`.
 
 ---
 
-## 🔐 Безопасность
-
-- **Ed25519 minisign** для подписи обновлений (Tauri updater + наш `tauri-signer`)
-- **Без телеметрии**, без аналитики, без "phone home" кроме проверки обновлений
-- **Локальные настройки** в `%APPDATA%\ru.classquiz.singbox\` (Tauri `app_data_dir`)
-- **Безопасный WebView**
-- **Open source** — каждая строчка кода видна
-
----
-
-## 🧪 Smoke-тест (Stage 1)
-
-Минимальная проверка, что sing-box живёт:
+## 🧑‍💻 Сборка из исходников
 
 ```powershell
-# Запустите Cloakwire один раз — он распакует sing-box в %APPDATA%\ru.classquiz.singbox\binaries\
-Get-Process sing-box
-# Должен показать запущенный процесс
+# Требования: Node 20+, Rust stable, зависимости Tauri для целевой платформы
+git clone https://github.com/markwhite7881-cpu/cloakwire.git
+cd cloakwire
+npm ci
+npm run tauri:build
 ```
+
+Для сборки Linux `.deb` используйте Ubuntu 22.04+ / Debian 12+ (либо WSL2) и скрипт:
+
+```bash
+./scripts/build-linux-deb.sh 1.3.1
+```
+
+`postinst` в итоговом `.deb` устанавливает capability только для `sing-box`, так как именно он реализует поддерживаемый TUN-путь Linux.
 
 ---
 
 ## 🤝 Contributing
 
-PR-ы приветствуются. Перед большим изменением лучше открыть issue — обсудим.
+PR-ы приветствуются. Для крупных изменений сначала откройте issue, чтобы обсудить направление.
 
-- **Code style:** `cargo fmt` для Rust, `prettier` для TS/TSX (`npm run build` проверяет)
-- **Tests:** `cargo test --lib` (56 unit-тестов на конфиг-генератор и парсер)
-- **Commits:** conventional commits помогают (`feat:`, `fix:`, `chore:`)
-
----
-
-## 🛠️ Почему кастомный подписант
-
-`npx tauri signer sign` подвисает на Windows после "Signing without password." (TTY-детект в tauri-cli сломан). Мы собрали `tauri-signer` crate, который использует тот же `minisign = "0.9"` что и апстрим, но без интерактивного prompt'а. Исходник: `src-tauri/crates/tauri-signer/`.
+- **Code style:** `cargo fmt` для Rust, Prettier для TS/TSX.
+- **Проверки:** `npm test`, затем production build; проверяйте артефакты до публикации.
+- **Коммиты:** conventional commits (`feat:`, `fix:`, `docs:`, `chore:`).
 
 ---
 
@@ -282,9 +240,9 @@ PR-ы приветствуются. Перед большим изменение
 
 ## 🙏 Благодарности
 
-- [**SagerNet/sing-box**](https://github.com/SagerNet/sing-box) — самый быстрый и гибкий VPN-протокол из существующих
-- [**Tauri**](https://tauri.app) — обёртка для десктопных приложений, которая не подводит
-- [**@anivPlugins**](https://t.me/anivPlugins) и [**@AnivVPN_bot**](https://t.me/AnivVPN_bot) — за предоставленные серверы для тестирования
+- [**SagerNet/sing-box**](https://github.com/SagerNet/sing-box)
+- [**XTLS/Xray-core**](https://github.com/XTLS/Xray-core)
+- [**Tauri**](https://tauri.app)
 
 ---
 
