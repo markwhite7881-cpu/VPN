@@ -82,11 +82,13 @@ jobs:
           echo "Xray executable SHA-256: $actual_sha256"
           [ "$actual_size" = '${{ matrix.xray_executable_size }}' ]
           [ "$actual_sha256" = '${{ matrix.xray_executable_sha256 }}' ]
-          file "$sidecar"
           if [ '${{ matrix.target }}' = 'aarch64-apple-darwin' ]; then
             "$sidecar" version
           else
-            file "$sidecar" | grep -q 'x86_64'
+            # The runner is ARM64, so do not execute an Intel sidecar. The pinned
+            # archive checksum, exact executable size, and executable SHA-256 above
+            # are the architecture-safe authenticity and identity checks.
+            echo 'Validated Intel Xray sidecar by pinned archive and executable checksums.'
           fi
 
       - name: Install JavaScript dependencies
