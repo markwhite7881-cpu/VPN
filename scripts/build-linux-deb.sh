@@ -74,7 +74,10 @@ chmod 0755 "$WORK/extracted/DEBIAN/postinst"
 # archives from scratch, so the result is byte-deterministic
 # (modulo timestamps and member order) and validates cleanly
 # with `dpkg-deb -I` / `--info`.
-dpkg-deb -b "$WORK/extracted" "$DEB_SRC"
+# `--root-owner-group` is required when this script runs as a non-root
+# build user: it preserves Debian's root/root ownership for all control and
+# data archive members instead of recording the local builder account.
+dpkg-deb --root-owner-group -b "$WORK/extracted" "$DEB_SRC"
 echo "==> injected postinst into $DEB_SRC"
 
 # 4) Copy the result back to this checkout's dist-release so the CI /
