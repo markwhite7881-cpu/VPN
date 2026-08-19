@@ -29,7 +29,7 @@ jobs:
             label: x64
             xray_archive: Xray-macos-64.zip
             xray_archive_sha256: f5b0471d3459eff1b82e48af0aeac186abcc3298210070afbbbd8437a4e8b203
-            xray_executable_sha256: afd0eabebb7994a18f29b00c5f50a4f7fbb77da06e24352d43035f3cad3c3786
+            xray_executable_sha256: afd0eaebb77994a18f29b00c5f50a4f7fbb77da06e24352d43035f3cad3c3786
             xray_executable_size: 35723312
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.2
