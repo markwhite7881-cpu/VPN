@@ -33,7 +33,11 @@ import { useReadyProfileMetadata } from "@/hooks/useReadyProfileMetadata";
 import { isSupported } from "@/lib/outbound";
 import { basename } from "@/lib/utils";
 import { shouldFrontendApplySystemProxy } from "@/lib/systemProxy";
-import { nextReconnectRequired, shouldShowReconnectNotice } from "@/lib/reconnectState";
+import {
+  nextReconnectRequired,
+  shouldReconnectAfterProfileSelection,
+  shouldShowReconnectNotice,
+} from "@/lib/reconnectState";
 import type {
   BinaryInfo,
   CustomRule,
@@ -798,7 +802,6 @@ export default function App() {
       // Resolve the new settings value up front, in two distinct
       // branches, so TypeScript's narrowing is happy in the async
       // closure below and the path is obvious for a human reader.
-      const selectedProfile = profiles[index];
       const selectedManual = selectedManualOutbound(profiles, index);
       const pickedTag = isAuto
         ? null
@@ -813,10 +816,7 @@ export default function App() {
         // Connect goes straight through the picked server.
         default_outbound: pickedTag,
       }));
-      if (selectedProfile?.kind === "ready_config") return;
-      // A full disconnect → regen → reconnect is the only path that is
-      // 100% reliable across sing-box versions.
-      if (status.status === "running") {
+      if (shouldReconnectAfterProfileSelection(status.status)) {
         await Promise.resolve();
         await reconnectCurrentProfile();
       }

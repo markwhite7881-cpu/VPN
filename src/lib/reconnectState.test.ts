@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { nextReconnectRequired, shouldShowReconnectNotice } from "./reconnectState";
+import {
+  nextReconnectRequired,
+  shouldReconnectAfterProfileSelection,
+  shouldShowReconnectNotice,
+} from "./reconnectState";
+
+describe("shouldReconnectAfterProfileSelection", () => {
+  it("reconnects a running VPN after selecting a ready subscription profile", () => {
+    expect(shouldReconnectAfterProfileSelection("running")).toBe(true);
+  });
+
+  it("does not reconnect while the VPN is stopped", () => {
+    expect(shouldReconnectAfterProfileSelection("stopped")).toBe(false);
+  });
+});
 
 describe("nextReconnectRequired", () => {
   it("does not mark stopped settings edits as pending", () => {

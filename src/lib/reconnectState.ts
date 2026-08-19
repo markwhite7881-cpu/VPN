@@ -11,10 +11,10 @@ export function nextReconnectRequired(
   return reconnectRequired || isRunning;
 }
 
-/**
- * The reconnect notice remains available while reconnecting, after a running
- * settings edit, or when a failed reconnect leaves the process stopped.
- */
+export function shouldReconnectAfterProfileSelection(status: Status): boolean {
+  return status === "running";
+}
+
 export function shouldShowReconnectNotice({
   reconnectInProgress,
   reconnectRequired,
